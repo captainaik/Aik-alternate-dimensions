@@ -2,19 +2,20 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>AIKs Alternate Dimensions</title>
+    <title>AIK's Alternate Dimensions</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: #eee; margin: 0; display: flex; height: 100vh; overflow: hidden; }
         #sidebar { width: 140px; background: #252525; border-right: 1px solid #444; display: flex; flex-direction: column; align-items: center; padding: 15px 0; gap: 8px; box-shadow: 2px 0 10px rgba(0,0,0,0.5); z-index: 10; overflow-y: auto; }
         #main { flex: 1; display: flex; flex-direction: column; position: relative; background: #111; }
-        .toolbar-top { background: #333; padding: 10px; display: flex; gap: 10px; border-bottom: 1px solid #444; align-items: center; z-index: 5;}
+        .toolbar-top { background: #333; padding: 10px; display: flex; gap: 15px; border-bottom: 1px solid #444; align-items: center; z-index: 5;}
+        .app-name { font-weight: bold; color: #007bff; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-right: 1px solid #444; padding-right: 15px; }
         #properties-area { width: 100%; padding: 10px; box-sizing: border-box; border-top: 1px solid #444; margin-top: 10px; }
-        #canvas-wrap { flex: 1; overflow: auto; display: flex; justify-content: center; align-items: center; }
-        canvas { background: #000; cursor: crosshair; }
+        #canvas-wrap { flex: 1; overflow: auto; display: flex; justify-content: center; align-items: center; padding: 20px; }
+        canvas { background: #000; cursor: crosshair; box-shadow: 0 0 30px rgba(0,0,0,0.8); }
         label { display: block; font-size: 9px; color: #aaa; margin-bottom: 4px; text-transform: uppercase; font-weight: bold; text-align: center;}
         input, textarea { width: 100%; background: #444; border: 1px solid #555; color: white; padding: 8px; border-radius: 4px; box-sizing: border-box; font-size: 13px; outline: none; }
-        textarea { height: 100px; resize: none; font-family: inherit; }
-        input:focus, textarea:focus { border-color: #007bff; background: #555; }
+        textarea { height: 120px; resize: none; font-family: inherit; }
+        input:focus, textarea:focus { border-color: #007bff; background: #3a3a3a; }
         .palette { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 5px; }
         .color-circle { width: 28px; height: 28px; border-radius: 4px; border: 1px solid transparent; cursor: pointer; }
         .color-circle.active { border-color: white; box-shadow: 0 0 5px rgba(255,255,255,0.5); }
@@ -68,7 +69,10 @@
 </div>
 
 <div id="main">
-    <div class="toolbar-top"><input type="file" id="upload" accept="image/*"></div>
+    <div class="toolbar-top">
+        <div class="app-name">AIK's Alternate Dimensions</div>
+        <input type="file" id="upload" accept="image/*">
+    </div>
     <div id="canvas-wrap"><canvas id="canvas"></canvas></div>
 </div>
 
@@ -82,13 +86,13 @@
     let img = new Image(), dims = [], comments = [], selected = null; 
     let isDrawing = false, isDragging = false, startX, startY;
     let curTool = 'measure', currentColor = '#ff3e3e';
+    const FIXED_WIDTH = 1600;
     const colors = ['#ff3e3e', '#1dd1a1', '#48dbfb', '#feca57', '#ffffff', '#ff9f43', '#5f27cd', '#2e86de', '#000000'];
 
     const setTool = (t) => {
         curTool = t;
         document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
         document.getElementById('t' + t.charAt(0).toUpperCase() + t.slice(1)).classList.add('active');
-        
         valLabel.innerText = t === 'comment' ? "COMMENT" : "VALUE";
         commentInput.style.display = t === 'comment' ? 'block' : 'none';
         measureInput.style.display = t === 'comment' ? 'none' : 'block';
@@ -108,7 +112,7 @@
         deselect();
     };
 
-    window.addEventListener('keydown', (e) => { if(e.key === 'Delete') deleteSelected(); });
+    window.addEventListener('keydown', (e) => { if(e.key === 'Delete' || e.key === 'Backspace' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) deleteSelected(); });
 
     colors.forEach(c => {
         const d = document.createElement('div');
@@ -125,9 +129,23 @@
     document.getElementById('upload').onchange = (e) => {
         const reader = new FileReader();
         reader.onload = (f) => {
-            img.onload = () => { canvas.width = img.width; canvas.height = img.height; dims=[]; comments=[]; render(); };
-            img.src = f.target.result;
-        }; reader.readAsDataURL(e.target.files[0]);
+            const tempImg = new Image();
+            tempImg.onload = () => {
+                const aspect = tempImg.height / tempImg.width;
+                canvas.width = FIXED_WIDTH;
+                canvas.height = FIXED_WIDTH * aspect;
+                
+                const offCanvas = document.createElement('canvas');
+                offCanvas.width = canvas.width; offCanvas.height = canvas.height;
+                const oCtx = offCanvas.getContext('2d');
+                oCtx.drawImage(tempImg, 0, 0, canvas.width, canvas.height);
+                
+                img.onload = () => { dims=[]; comments=[]; render(); };
+                img.src = offCanvas.toDataURL('image/png');
+            };
+            tempImg.src = f.target.result;
+        }; 
+        reader.readAsDataURL(e.target.files[0]);
     };
 
     const getMouse = (e) => {
@@ -152,7 +170,7 @@
             selected = found; isDragging = true; startX = pos.x; startY = pos.y;
             const targetInput = found.type === 'com' ? commentInput : measureInput;
             setTool(found.type === 'com' ? 'comment' : 'measure');
-            selected = found; // Re-select after tool swap
+            selected = found;
             targetInput.value = found.item.val || found.item.text;
             targetInput.focus();
             render(); return;
@@ -168,7 +186,7 @@
                 dims.push(item); selected = {type:'dim', item}; measureInput.focus();
             } else if (curTool === 'distant' && !activeDist) {
                 dims.push({x1:startX, y1:startY, x2:pos.x, y2:pos.y, val:measureInput.value || "100", color:currentColor, type:'distant', offsetLocked:false, offsetVec:{x:0,y:0}});
-                return; // Wait for offset click
+                return;
             } else if (curTool === 'distant' && activeDist) {
                 activeDist.offsetLocked = true; selected = {type:'dim', item:activeDist}; measureInput.focus();
             } else if (curTool === 'comment') {
@@ -183,7 +201,7 @@
         const pos = getMouse(e);
         if(isDragging && selected) {
             const dx = pos.x - startX, dy = pos.y - startY;
-            if(selected.type === 'com') { selected.item.x2 += dx; selected.item.y2 += dy; } // Moves only box, not anchor x1,y1
+            if(selected.type === 'com') { selected.item.x2 += dx; selected.item.y2 += dy; }
             else if (selected.item.type === 'distant') {
                 const angle = Math.atan2(selected.item.y2 - selected.item.y1, selected.item.x2 - selected.item.x1) + Math.PI/2;
                 const dist = ((pos.x - selected.item.x1) * Math.cos(angle) + (pos.y - selected.item.y1) * Math.sin(angle));
@@ -213,35 +231,35 @@
         const ox = dObj?.offsetVec?.x || 0, oy = dObj?.offsetVec?.y || 0;
         const ax1 = x1 + ox, ay1 = y1 + oy, ax2 = x2 + ox, ay2 = y2 + oy;
         if(dObj?.type === 'distant') {
-            ctx.setLineDash([10, 8]); ctx.strokeStyle = color; ctx.lineWidth = 2;
+            ctx.setLineDash([12, 10]); ctx.strokeStyle = color; ctx.lineWidth = 2;
             ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(ax1, ay1); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(ax2, ay2); ctx.stroke();
             ctx.setLineDash([]);
         }
-        ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2); ctx.stroke();
+        ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2); ctx.stroke();
         const ang = Math.atan2(ay2-ay1, ax2-ax1);
         const tick = (x, y) => {
-            ctx.beginPath(); ctx.moveTo(x + Math.cos(ang + Math.PI/2) * 15, y + Math.sin(ang + Math.PI/2) * 15);
-            ctx.lineTo(x - Math.cos(ang + Math.PI/2) * 15, y - Math.sin(ang + Math.PI/2) * 15); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(x + Math.cos(ang + Math.PI/2) * 18, y + Math.sin(ang + Math.PI/2) * 18);
+            ctx.lineTo(x - Math.cos(ang + Math.PI/2) * 18, y - Math.sin(ang + Math.PI/2) * 18); ctx.stroke();
         };
         tick(ax1, ay1); tick(ax2, ay2);
         const txt = (val || "100") + " cm", mx = (ax1+ax2)/2, my = (ay1+ay2)/2;
-        ctx.font = "bold 16px Arial"; const tw = ctx.measureText(txt).width;
-        ctx.fillStyle = "rgba(0,0,0,0.8)"; roundRect(ctx, mx-tw/2-10, my-18, tw+20, 28, 6, true, false);
+        ctx.font = "bold 18px Arial"; const tw = ctx.measureText(txt).width;
+        ctx.fillStyle = "rgba(0,0,0,0.8)"; roundRect(ctx, mx-tw/2-10, my-20, tw+20, 32, 6, true, false);
         ctx.fillStyle = color; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(txt, mx, my - 2);
     }
 
     function drawComment(x1, y1, x2, y2, text, color, isTemp) {
-        ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-        ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x1, y1, 5, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+        ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x1, y1, 6, 0, Math.PI*2); ctx.fill();
         if(isTemp) return;
-        ctx.font = "bold 16px Arial"; const lines = (text || "Comment").split('\n');
+        ctx.font = "bold 18px Arial"; const lines = (text || "Comment").split('\n');
         let mw = 0; lines.forEach(l => mw = Math.max(mw, ctx.measureText(l).width));
-        const bh = lines.length * 24 + 20, bw = mw + 40;
+        const bh = lines.length * 26 + 25, bw = mw + 50;
         const bx = x2 < x1 ? x2 - bw : x2, by = y2 < y1 ? y2 - bh : y2;
         const cIdx = comments.findIndex(c => c.text === text);
         if(cIdx !== -1) comments[cIdx].box = {x:bx, y:by, w:bw, h:bh};
-        ctx.fillStyle = color; roundRect(ctx, bx, by, bw, bh, 10, true, false);
+        ctx.fillStyle = color; roundRect(ctx, bx, by, bw, bh, 12, true, false);
         ctx.fillStyle = (color.toLowerCase() === '#ffffff' || color === 'white') ? "black" : "white";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         lines.forEach((l, i) => ctx.fillText(l, bx + bw/2, by + (bh / (lines.length + 1)) * (i + 1)));
@@ -257,7 +275,13 @@
     }
 
     document.getElementById('clearAll').onclick = () => { dims=[]; comments=[]; deselect(); };
-    document.getElementById('download').onclick = () => { deselect(); render(); const link = document.createElement('a'); link.download = 'noa_markup.jpg'; link.href = canvas.toDataURL('image/jpeg', 1.0); link.click(); };
+    document.getElementById('download').onclick = () => { 
+        deselect(); render(); 
+        const link = document.createElement('a'); 
+        link.download = 'aik_markup.jpg'; 
+        link.href = canvas.toDataURL('image/jpeg', 1.0); 
+        link.click(); 
+    };
 
     function render() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
