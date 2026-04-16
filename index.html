@@ -33,7 +33,7 @@
         <svg viewBox="0 0 24 24"><path d="M13.64,21.89C13.9,22.4 13.53,23 12.95,23C12.46,23 12.1,22.72 11.96,22.27L10.5,18L7,21.5V2L18,13L13.64,13.88L15.11,18.2C15.26,18.66 14.9,19.22 14.36,19.22C14.05,19.22 13.78,19.04 13.64,18.77L12.06,14.12L13.64,21.89Z"/></svg>
         <span>SELECT</span>
     </button>
-    <button class="tool-btn active" id="tMeasure">
+    <button class="tool-btn" id="tMeasure">
         <svg viewBox="0 0 24 24"><path d="M7,2H17A2,2 0 0,1 19,4V20A2,2 0 0,1 17,22H7A2,2 0 0,1 5,20V4A2,2 0 0,1 7,2M7,4V6H10V8H7V10H12V12H7V14H10V16H7V18H12V20H17V4H7Z"/></svg>
         <span>MEASURE</span>
     </button>
@@ -41,16 +41,16 @@
         <svg viewBox="0 0 24 24"><path d="M2,21V19H22V21H2M2,5V3H22V5H2M12,17V7L14.5,9.5L15.92,8.08L11,3.16L6.08,8.08L7.5,9.5L10,7V17L7.5,14.5L6.08,15.92L11,20.84L15.92,15.92L14.5,14.5L12,17Z"/></svg>
         <span>DISTANT</span>
     </button>
-    <button class="tool-btn" id="tComment">
+    <button class="tool-btn active" id="tComment">
         <svg viewBox="0 0 24 24"><path d="M20,2H4A2,2 0 0,0 2,4V22L6,18H20A2,2 0 0,0 22,16V4A2,2 0 0,0 20,2M20,16H5.17L4,17.17V4H20V16M11,5H13V9H11V5M11,11H13V13H11V11Z"/></svg>
         <span>COMMENT</span>
     </button>
 
     <div id="properties-area">
-        <label id="valLabel">VALUE</label>
+        <label id="valLabel">COMMENT</label>
         <div id="inputContainer">
-            <input type="text" id="measureInput" placeholder="100">
-            <textarea id="commentInput" style="display:none;" placeholder="Type comment..."></textarea>
+            <input type="text" id="measureInput" placeholder="100" style="display: none;">
+            <textarea id="commentInput" style="display: block;" placeholder="Type comment..."></textarea>
         </div>
         <label style="margin-top:10px;">COLOR</label>
         <div class="palette" id="mainPalette"></div>
@@ -85,7 +85,7 @@
     
     let img = new Image(), dims = [], comments = [], selected = null, history = []; 
     let isDrawing = false, isDragging = false, startX, startY;
-    let curTool = 'measure', currentColor = '#ff3e3e', FIXED_WIDTH = 1600;
+    let curTool = 'comment', currentColor = '#ff3e3e', FIXED_WIDTH = 1600;
     const colors = ['#ff3e3e', '#1dd1a1', '#48dbfb', '#feca57', '#ffffff', '#ff9f43', '#5f27cd', '#2e86de', '#000000'];
 
     const saveHistory = () => {
@@ -100,19 +100,18 @@
         deselect();
     };
 
-    const setTool = (t, fromSelection = false) => {
+    const setTool = (t, keepSelection = false) => {
         isDrawing = false;
         curTool = t;
         document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-        const btnId = 't' + t.charAt(0).toUpperCase() + t.slice(1);
-        const btn = document.getElementById(btnId);
-        if(btn) btn.classList.add('active');
+        const btn = document.getElementById('t' + t.charAt(0).toUpperCase() + t.slice(1));
+        if (btn) btn.classList.add('active');
         
         valLabel.innerText = t === 'comment' ? "COMMENT" : "VALUE";
         commentInput.style.display = t === 'comment' ? 'block' : 'none';
         measureInput.style.display = t === 'comment' ? 'none' : 'block';
         
-        if (!fromSelection) deselect();
+        if (!keepSelection) deselect();
     };
 
     document.getElementById('tSelect').onclick = (e) => { e.stopPropagation(); setTool('select'); };
@@ -127,13 +126,7 @@
         }
     });
 
-    const deselect = () => { 
-        selected = null; 
-        measureInput.value = ""; 
-        commentInput.value = ""; 
-        render(); 
-    };
-
+    const deselect = () => { selected = null; render(); };
     const deleteSelected = () => {
         if(!selected) return;
         if(selected.type==='dim') dims = dims.filter(d => d !== selected.item);
@@ -159,11 +152,8 @@
             tempImg.onload = () => {
                 const aspect = tempImg.height / tempImg.width;
                 canvas.width = FIXED_WIDTH; canvas.height = FIXED_WIDTH * aspect;
-                const offCanvas = document.createElement('canvas');
-                offCanvas.width = canvas.width; offCanvas.height = canvas.height;
-                offCanvas.getContext('2d').drawImage(tempImg, 0, 0, canvas.width, canvas.height);
                 img.onload = () => { dims=[]; comments=[]; history=[]; render(); };
-                img.src = offCanvas.toDataURL('image/png');
+                img.src = f.target.result;
             };
             tempImg.src = f.target.result;
         }; reader.readAsDataURL(e.target.files[0]);
@@ -179,7 +169,7 @@
         const pos = getMouse(e);
         let found = null;
 
-        // Selection Engine: Search Reverse order (Top to Bottom visual stack)
+        // selection search (Reverse order for top-most)
         for (let i = comments.length - 1; i >= 0; i--) {
             const c = comments[i];
             if(c.box && pos.x >= c.box.x && pos.x <= c.box.x + c.box.w && pos.y >= c.box.y && pos.y <= c.box.y + c.box.h) {
@@ -197,9 +187,9 @@
         if(found) {
             selected = found; isDragging = true; startX = pos.x; startY = pos.y;
             setTool(found.type === 'com' ? 'comment' : (found.item.type === 'distant' ? 'distant' : 'measure'), true);
-            const targetInput = found.type === 'com' ? commentInput : measureInput;
-            targetInput.value = found.item.val || found.item.text || "";
-            targetInput.focus();
+            const input = found.type === 'com' ? commentInput : measureInput;
+            input.value = found.item.text || found.item.val || "";
+            input.focus();
             render(); return;
         }
 
@@ -209,7 +199,7 @@
         if(!isDrawing) { 
             isDrawing=true; startX=pos.x; startY=pos.y; 
             if(curTool === 'comment') commentInput.value = "";
-            if(curTool === 'measure') measureInput.value = "";
+            else measureInput.value = "";
         }
         else {
             if (curTool === 'distant' && activeDist) {
@@ -280,7 +270,7 @@
         tick(ax1, ay1); tick(ax2, ay2);
         const txt = (val || "100") + " cm", mx = (ax1+ax2)/2, my = (ay1+ay2)/2;
         ctx.font = "bold 18px Arial"; const tw = ctx.measureText(txt).width;
-        ctx.fillStyle = selected?.item === dObj ? "rgba(0,123,255,0.9)" : "rgba(0,0,0,0.8)";
+        ctx.fillStyle = selected?.item === dObj ? "#007bff" : "rgba(0,0,0,0.8)";
         roundRect(ctx, mx-tw/2-10, my-20, tw+20, 32, 6, true, false);
         ctx.fillStyle = color; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(txt, mx, my - 2);
     }
@@ -294,13 +284,12 @@
         const bh = lines.length * 26 + 25, bw = Math.max(50, mw + 50);
         const bx = x2 < x1 ? x2 - bw : x2, by = y2 < y1 ? y2 - bh : y2;
         
-        // Store visual box data in the object for hit detection
-        const targetComment = comments.find(c => c === cObj || (c.x1 === x1 && c.x2 === x2 && c.y1 === y1 && c.y2 === y2));
-        if(targetComment) targetComment.box = {x:bx, y:by, w:bw, h:bh};
+        // Use the object passed from render to store its own hitbox
+        if(cObj) cObj.box = {x:bx, y:by, w:bw, h:bh};
 
-        ctx.fillStyle = selected?.item === targetComment ? "#007bff" : color;
+        ctx.fillStyle = selected?.item === cObj ? "#007bff" : color;
         roundRect(ctx, bx, by, bw, bh, 12, true, false);
-        ctx.fillStyle = (color.toLowerCase() === '#ffffff' || color === 'white') ? "black" : "white";
+        ctx.fillStyle = (color.toLowerCase() === '#ffffff' || color === 'white' || color === 'rgb(255, 255, 255)') ? "black" : "white";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         lines.forEach((l, i) => ctx.fillText(l, bx + bw/2, by + (bh / (lines.length + 1)) * (i + 1)));
     }
