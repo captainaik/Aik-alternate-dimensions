@@ -100,25 +100,21 @@
         deselect();
     };
 
-    const setTool = (t) => {
-        // Reset drawing state entirely when switching tools
+    const setTool = (t, fromSelection = false) => {
         isDrawing = false;
         curTool = t;
         document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-        document.getElementById('t' + t.charAt(0).toUpperCase() + t.slice(1)).classList.add('active');
+        const btnId = 't' + t.charAt(0).toUpperCase() + t.slice(1);
+        const btn = document.getElementById(btnId);
+        if(btn) btn.classList.add('active');
         
         valLabel.innerText = t === 'comment' ? "COMMENT" : "VALUE";
         commentInput.style.display = t === 'comment' ? 'block' : 'none';
         measureInput.style.display = t === 'comment' ? 'none' : 'block';
         
-        if (!selected) { 
-            measureInput.value = ""; 
-            commentInput.value = ""; 
-        }
-        deselect();
+        if (!fromSelection) deselect();
     };
 
-    // Event listeners for tools
     document.getElementById('tSelect').onclick = (e) => { e.stopPropagation(); setTool('select'); };
     document.getElementById('tMeasure').onclick = (e) => { e.stopPropagation(); setTool('measure'); };
     document.getElementById('tDistant').onclick = (e) => { e.stopPropagation(); setTool('distant'); };
@@ -131,7 +127,13 @@
         }
     });
 
-    const deselect = () => { selected = null; render(); };
+    const deselect = () => { 
+        selected = null; 
+        measureInput.value = ""; 
+        commentInput.value = ""; 
+        render(); 
+    };
+
     const deleteSelected = () => {
         if(!selected) return;
         if(selected.type==='dim') dims = dims.filter(d => d !== selected.item);
@@ -145,8 +147,7 @@
         d.onclick = () => {
             currentColor = c;
             document.querySelectorAll('.color-circle').forEach(x => x.classList.toggle('active', x.style.backgroundColor === c));
-            if(selected) { saveHistory(); selected.item.color = c; }
-            render();
+            if(selected) { saveHistory(); selected.item.color = c; render(); }
         };
         document.getElementById('mainPalette').appendChild(d);
     });
@@ -178,10 +179,10 @@
         const pos = getMouse(e);
         let found = null;
 
-        // selection
+        // Selection Engine: Search Reverse order (Top to Bottom visual stack)
         for (let i = comments.length - 1; i >= 0; i--) {
             const c = comments[i];
-            if(c.box && pos.x > c.box.x && pos.x < c.box.x+c.box.w && pos.y > c.box.y && pos.y < c.box.y+c.box.h) {
+            if(c.box && pos.x >= c.box.x && pos.x <= c.box.x + c.box.w && pos.y >= c.box.y && pos.y <= c.box.y + c.box.h) {
                 found = {type:'com', item:c}; break;
             }
         }
@@ -195,10 +196,9 @@
 
         if(found) {
             selected = found; isDragging = true; startX = pos.x; startY = pos.y;
+            setTool(found.type === 'com' ? 'comment' : (found.item.type === 'distant' ? 'distant' : 'measure'), true);
             const targetInput = found.type === 'com' ? commentInput : measureInput;
-            setTool(found.type === 'com' ? 'comment' : 'measure');
-            selected = found; 
-            targetInput.value = found.item.val || found.item.text;
+            targetInput.value = found.item.val || found.item.text || "";
             targetInput.focus();
             render(); return;
         }
@@ -280,11 +280,12 @@
         tick(ax1, ay1); tick(ax2, ay2);
         const txt = (val || "100") + " cm", mx = (ax1+ax2)/2, my = (ay1+ay2)/2;
         ctx.font = "bold 18px Arial"; const tw = ctx.measureText(txt).width;
-        ctx.fillStyle = "rgba(0,0,0,0.8)"; roundRect(ctx, mx-tw/2-10, my-20, tw+20, 32, 6, true, false);
+        ctx.fillStyle = selected?.item === dObj ? "rgba(0,123,255,0.9)" : "rgba(0,0,0,0.8)";
+        roundRect(ctx, mx-tw/2-10, my-20, tw+20, 32, 6, true, false);
         ctx.fillStyle = color; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(txt, mx, my - 2);
     }
 
-    function drawComment(x1, y1, x2, y2, text, color, isTemp) {
+    function drawComment(x1, y1, x2, y2, text, color, isTemp, cObj) {
         ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
         ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x1, y1, 6, 0, Math.PI*2); ctx.fill();
         if(isTemp) return;
@@ -292,9 +293,13 @@
         let mw = 0; lines.forEach(l => mw = Math.max(mw, ctx.measureText(l).width));
         const bh = lines.length * 26 + 25, bw = Math.max(50, mw + 50);
         const bx = x2 < x1 ? x2 - bw : x2, by = y2 < y1 ? y2 - bh : y2;
-        const cIdx = comments.findIndex(c => c === (selected?.item || null) || c.text === text);
-        if(cIdx !== -1) comments[cIdx].box = {x:bx, y:by, w:bw, h:bh};
-        ctx.fillStyle = color; roundRect(ctx, bx, by, bw, bh, 12, true, false);
+        
+        // Store visual box data in the object for hit detection
+        const targetComment = comments.find(c => c === cObj || (c.x1 === x1 && c.x2 === x2 && c.y1 === y1 && c.y2 === y2));
+        if(targetComment) targetComment.box = {x:bx, y:by, w:bw, h:bh};
+
+        ctx.fillStyle = selected?.item === targetComment ? "#007bff" : color;
+        roundRect(ctx, bx, by, bw, bh, 12, true, false);
         ctx.fillStyle = (color.toLowerCase() === '#ffffff' || color === 'white') ? "black" : "white";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         lines.forEach((l, i) => ctx.fillText(l, bx + bw/2, by + (bh / (lines.length + 1)) * (i + 1)));
@@ -316,7 +321,7 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         if(img.src) ctx.drawImage(img, 0, 0);
         dims.forEach(d => drawMeasure(d.x1, d.y1, d.x2, d.y2, d.val, d.color, false, d));
-        comments.forEach(c => drawComment(c.x1, c.y1, c.x2, c.y2, c.text, c.color, false));
+        comments.forEach(c => drawComment(c.x1, c.y1, c.x2, c.y2, c.text, c.color, false, c));
     }
     setTool('measure');
 </script>
