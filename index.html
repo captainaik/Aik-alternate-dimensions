@@ -5,7 +5,7 @@
     <title>AIK's Alternate Dimensions</title>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: #eee; margin: 0; display: flex; height: 100vh; overflow: hidden; }
-        #sidebar { width: 140px; background: #252525; border-right: 1px solid #444; display: flex; flex-direction: column; align-items: center; padding: 15px 0; gap: 8px; box-shadow: 2px 0 10px rgba(0,0,0,0.5); z-index: 10; overflow-y: auto; }
+        #sidebar { width: 140px; background: #252525; border-right: 1px solid #444; display: flex; flex-direction: column; align-items: center; padding: 15px 0; gap: 8px; box-shadow: 2px 0 10px rgba(0,0,0,0.5); z-index: 100; overflow-y: auto; }
         #main { flex: 1; display: flex; flex-direction: column; position: relative; background: #111; }
         .toolbar-top { background: #333; padding: 10px; display: flex; gap: 15px; border-bottom: 1px solid #444; align-items: center; z-index: 5;}
         .app-name { font-weight: bold; color: #007bff; font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; border-right: 1px solid #444; padding-right: 15px; }
@@ -19,7 +19,7 @@
         .palette { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 5px; }
         .color-circle { width: 28px; height: 28px; border-radius: 4px; border: 1px solid transparent; cursor: pointer; }
         .color-circle.active { border-color: white; box-shadow: 0 0 5px rgba(255,255,255,0.5); }
-        .tool-btn { background: transparent; border: none; width: 90%; padding: 8px 5px; border-radius: 8px; color: #aaa; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; transition: 0.2s; }
+        .tool-btn { background: transparent; border: none; width: 90%; padding: 8px 5px; border-radius: 8px; color: #aaa; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; transition: 0.2s; position: relative; z-index: 101;}
         .tool-btn span { font-size: 9px; font-weight: bold; pointer-events: none; }
         .tool-btn:hover { background: #333; color: white; }
         .tool-btn.active { background: #007bff; color: white; }
@@ -101,15 +101,28 @@
     };
 
     const setTool = (t) => {
+        // Reset drawing state entirely when switching tools
+        isDrawing = false;
         curTool = t;
         document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
         document.getElementById('t' + t.charAt(0).toUpperCase() + t.slice(1)).classList.add('active');
+        
         valLabel.innerText = t === 'comment' ? "COMMENT" : "VALUE";
         commentInput.style.display = t === 'comment' ? 'block' : 'none';
         measureInput.style.display = t === 'comment' ? 'none' : 'block';
-        if (!selected) { measureInput.value = ""; commentInput.value = ""; }
+        
+        if (!selected) { 
+            measureInput.value = ""; 
+            commentInput.value = ""; 
+        }
         deselect();
     };
+
+    // Event listeners for tools
+    document.getElementById('tSelect').onclick = (e) => { e.stopPropagation(); setTool('select'); };
+    document.getElementById('tMeasure').onclick = (e) => { e.stopPropagation(); setTool('measure'); };
+    document.getElementById('tDistant').onclick = (e) => { e.stopPropagation(); setTool('distant'); };
+    document.getElementById('tComment').onclick = (e) => { e.stopPropagation(); setTool('comment'); };
 
     window.addEventListener('keydown', (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); }
@@ -165,7 +178,7 @@
         const pos = getMouse(e);
         let found = null;
 
-        // Selection: Look backwards so top items are picked first
+        // selection
         for (let i = comments.length - 1; i >= 0; i--) {
             const c = comments[i];
             if(c.box && pos.x > c.box.x && pos.x < c.box.x+c.box.w && pos.y > c.box.y && pos.y < c.box.y+c.box.h) {
