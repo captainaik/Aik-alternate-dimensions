@@ -41,16 +41,16 @@
         <svg viewBox="0 0 24 24"><path d="M2,21V19H22V21H2M2,5V3H22V5H2M12,17V7L14.5,9.5L15.92,8.08L11,3.16L6.08,8.08L7.5,9.5L10,7V17L7.5,14.5L6.08,15.92L11,20.84L15.92,15.92L14.5,14.5L12,17Z"/></svg>
         <span>DISTANT</span>
     </button>
-    <button class="tool-btn active" id="tComment">
+    <button class="tool-btn" id="tComment">
         <svg viewBox="0 0 24 24"><path d="M20,2H4A2,2 0 0,0 2,4V22L6,18H20A2,2 0 0,0 22,16V4A2,2 0 0,0 20,2M20,16H5.17L4,17.17V4H20V16M11,5H13V9H11V5M11,11H13V13H11V11Z"/></svg>
         <span>COMMENT</span>
     </button>
 
     <div id="properties-area">
-        <label id="valLabel">COMMENT</label>
+        <label id="valLabel">VALUE</label>
         <div id="inputContainer">
-            <input type="text" id="measureInput" placeholder="100" style="display: none;">
-            <textarea id="commentInput" style="display: block;" placeholder="Type comment..."></textarea>
+            <input type="text" id="measureInput" placeholder="100">
+            <textarea id="commentInput" style="display: none;" placeholder="Type comment..."></textarea>
         </div>
         <label style="margin-top:10px;">COLOR</label>
         <div class="palette" id="mainPalette"></div>
@@ -85,7 +85,7 @@
     
     let img = new Image(), dims = [], comments = [], selected = null, history = []; 
     let isDrawing = false, isDragging = false, startX, startY;
-    let curTool = 'comment', currentColor = '#ff3e3e', FIXED_WIDTH = 1600;
+    let curTool = 'measure', currentColor = '#ff3e3e', FIXED_WIDTH = 1600;
     const colors = ['#ff3e3e', '#1dd1a1', '#48dbfb', '#feca57', '#ffffff', '#ff9f43', '#5f27cd', '#2e86de', '#000000'];
 
     const saveHistory = () => {
@@ -146,17 +146,25 @@
     });
 
     document.getElementById('upload').onchange = (e) => {
+        const file = e.target.files[0];
+        if(!file) return;
         const reader = new FileReader();
         reader.onload = (f) => {
             const tempImg = new Image();
             tempImg.onload = () => {
+                // FIXED 1600PX WIDTH LOGIC
                 const aspect = tempImg.height / tempImg.width;
-                canvas.width = FIXED_WIDTH; canvas.height = FIXED_WIDTH * aspect;
-                img.onload = () => { dims=[]; comments=[]; history=[]; render(); };
+                canvas.width = FIXED_WIDTH; 
+                canvas.height = FIXED_WIDTH * aspect;
+                
+                img.onload = () => { 
+                    dims=[]; comments=[]; history=[]; render(); 
+                };
                 img.src = f.target.result;
             };
             tempImg.src = f.target.result;
-        }; reader.readAsDataURL(e.target.files[0]);
+        }; 
+        reader.readAsDataURL(file);
     };
 
     const getMouse = (e) => {
@@ -169,7 +177,6 @@
         const pos = getMouse(e);
         let found = null;
 
-        // Selection engine (Reverse order for top-most layer)
         for (let i = comments.length - 1; i >= 0; i--) {
             const c = comments[i];
             if(c.box && pos.x >= c.box.x && pos.x <= c.box.x + c.box.w && pos.y >= c.box.y && pos.y <= c.box.y + c.box.h) {
@@ -271,7 +278,6 @@
         const txt = (val || "100") + " cm", mx = (ax1+ax2)/2, my = (ay1+ay2)/2;
         ctx.font = "bold 18px Arial"; const tw = ctx.measureText(txt).width;
         
-        // Highlight logic
         if (selected?.item === dObj) {
             ctx.strokeStyle = "#007bff"; ctx.lineWidth = 3;
             roundRect(ctx, mx-tw/2-13, my-23, tw+26, 38, 8, false, true);
@@ -293,7 +299,6 @@
         
         if(cObj) cObj.box = {x:bx, y:by, w:bw, h:bh};
 
-        // Blue Outline Highlight
         if (selected?.item === cObj) {
             ctx.strokeStyle = "#007bff"; ctx.lineWidth = 4;
             roundRect(ctx, bx - 4, by - 4, bw + 8, bh + 8, 14, false, true);
@@ -322,7 +327,7 @@
 
     function render() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        if(img.src) ctx.drawImage(img, 0, 0);
+        if(img.src) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         dims.forEach(d => drawMeasure(d.x1, d.y1, d.x2, d.y2, d.val, d.color, false, d));
         comments.forEach(c => drawComment(c.x1, c.y1, c.x2, c.y2, c.text, c.color, false, c));
     }
