@@ -83,11 +83,22 @@
     const commentInput = document.getElementById('commentInput');
     const valLabel = document.getElementById('valLabel');
     
-    let img = new Image(), dims = [], comments = [], selected = null; 
+    let img = new Image(), dims = [], comments = [], selected = null, history = []; 
     let isDrawing = false, isDragging = false, startX, startY;
-    let curTool = 'measure', currentColor = '#ff3e3e';
-    const FIXED_WIDTH = 1600;
+    let curTool = 'measure', currentColor = '#ff3e3e', FIXED_WIDTH = 1600;
     const colors = ['#ff3e3e', '#1dd1a1', '#48dbfb', '#feca57', '#ffffff', '#ff9f43', '#5f27cd', '#2e86de', '#000000'];
+
+    const saveHistory = () => {
+        history.push(JSON.stringify({ dims, comments }));
+        if (history.length > 50) history.shift();
+    };
+
+    const undo = () => {
+        if (history.length === 0) return;
+        const state = JSON.parse(history.pop());
+        dims = state.dims; comments = state.comments;
+        deselect();
+    };
 
     const setTool = (t) => {
         curTool = t;
@@ -96,13 +107,16 @@
         valLabel.innerText = t === 'comment' ? "COMMENT" : "VALUE";
         commentInput.style.display = t === 'comment' ? 'block' : 'none';
         measureInput.style.display = t === 'comment' ? 'none' : 'block';
+        if (!selected) { measureInput.value = ""; commentInput.value = ""; }
         deselect();
     };
 
-    document.getElementById('tSelect').onclick = () => setTool('select');
-    document.getElementById('tMeasure').onclick = () => setTool('measure');
-    document.getElementById('tDistant').onclick = () => setTool('distant');
-    document.getElementById('tComment').onclick = () => setTool('comment');
+    window.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); }
+        if (e.key === 'Delete' || (e.key === 'Backspace' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName))) {
+            if (selected) { saveHistory(); deleteSelected(); }
+        }
+    });
 
     const deselect = () => { selected = null; render(); };
     const deleteSelected = () => {
@@ -112,15 +126,13 @@
         deselect();
     };
 
-    window.addEventListener('keydown', (e) => { if(e.key === 'Delete' || e.key === 'Backspace' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) deleteSelected(); });
-
     colors.forEach(c => {
         const d = document.createElement('div');
         d.className = 'color-circle'; d.style.background = c;
         d.onclick = () => {
             currentColor = c;
             document.querySelectorAll('.color-circle').forEach(x => x.classList.toggle('active', x.style.backgroundColor === c));
-            if(selected) selected.item.color = c;
+            if(selected) { saveHistory(); selected.item.color = c; }
             render();
         };
         document.getElementById('mainPalette').appendChild(d);
@@ -132,20 +144,15 @@
             const tempImg = new Image();
             tempImg.onload = () => {
                 const aspect = tempImg.height / tempImg.width;
-                canvas.width = FIXED_WIDTH;
-                canvas.height = FIXED_WIDTH * aspect;
-                
+                canvas.width = FIXED_WIDTH; canvas.height = FIXED_WIDTH * aspect;
                 const offCanvas = document.createElement('canvas');
                 offCanvas.width = canvas.width; offCanvas.height = canvas.height;
-                const oCtx = offCanvas.getContext('2d');
-                oCtx.drawImage(tempImg, 0, 0, canvas.width, canvas.height);
-                
-                img.onload = () => { dims=[]; comments=[]; render(); };
+                offCanvas.getContext('2d').drawImage(tempImg, 0, 0, canvas.width, canvas.height);
+                img.onload = () => { dims=[]; comments=[]; history=[]; render(); };
                 img.src = offCanvas.toDataURL('image/png');
             };
             tempImg.src = f.target.result;
-        }; 
-        reader.readAsDataURL(e.target.files[0]);
+        }; reader.readAsDataURL(e.target.files[0]);
     };
 
     const getMouse = (e) => {
@@ -158,19 +165,26 @@
         const pos = getMouse(e);
         let found = null;
 
-        dims.forEach(d => {
-            const mx = (d.x1+d.x2)/2 + (d.offsetVec?.x || 0), my = (d.y1+d.y2)/2 + (d.offsetVec?.y || 0);
-            if(Math.hypot(pos.x-mx, pos.y-my) < 40) found = {type:'dim', item:d};
-        });
-        if(!found) comments.forEach(c => {
-            if(c.box && pos.x > c.box.x && pos.x < c.box.x+c.box.w && pos.y > c.box.y && pos.y < c.box.y+c.box.h) found = {type:'com', item:c};
-        });
+        // Selection: Look backwards so top items are picked first
+        for (let i = comments.length - 1; i >= 0; i--) {
+            const c = comments[i];
+            if(c.box && pos.x > c.box.x && pos.x < c.box.x+c.box.w && pos.y > c.box.y && pos.y < c.box.y+c.box.h) {
+                found = {type:'com', item:c}; break;
+            }
+        }
+        if(!found) {
+            for (let i = dims.length - 1; i >= 0; i--) {
+                const d = dims[i];
+                const mx = (d.x1+d.x2)/2 + (d.offsetVec?.x || 0), my = (d.y1+d.y2)/2 + (d.offsetVec?.y || 0);
+                if(Math.hypot(pos.x-mx, pos.y-my) < 40) { found = {type:'dim', item:d}; break; }
+            }
+        }
 
         if(found) {
             selected = found; isDragging = true; startX = pos.x; startY = pos.y;
             const targetInput = found.type === 'com' ? commentInput : measureInput;
             setTool(found.type === 'com' ? 'comment' : 'measure');
-            selected = found;
+            selected = found; 
             targetInput.value = found.item.val || found.item.text;
             targetInput.focus();
             render(); return;
@@ -179,21 +193,29 @@
         if(curTool === 'select') { deselect(); return; }
 
         const activeDist = dims.find(d => d.type === 'distant' && !d.offsetLocked);
-        if(!isDrawing) { isDrawing=true; startX=pos.x; startY=pos.y; }
+        if(!isDrawing) { 
+            isDrawing=true; startX=pos.x; startY=pos.y; 
+            if(curTool === 'comment') commentInput.value = "";
+            if(curTool === 'measure') measureInput.value = "";
+        }
         else {
-            if(curTool === 'measure') {
-                const item = {x1:startX, y1:startY, x2:pos.x, y2:pos.y, val:measureInput.value || "100", color:currentColor, type:'measure'};
-                dims.push(item); selected = {type:'dim', item}; measureInput.focus();
-            } else if (curTool === 'distant' && !activeDist) {
-                dims.push({x1:startX, y1:startY, x2:pos.x, y2:pos.y, val:measureInput.value || "100", color:currentColor, type:'distant', offsetLocked:false, offsetVec:{x:0,y:0}});
-                return;
-            } else if (curTool === 'distant' && activeDist) {
-                activeDist.offsetLocked = true; selected = {type:'dim', item:activeDist}; measureInput.focus();
-            } else if (curTool === 'comment') {
-                const item = {x1:startX, y1:startY, x2:pos.x, y2:pos.y, text:commentInput.value || "New Comment", color:currentColor};
-                comments.push(item); selected = {type:'com', item}; commentInput.focus();
+            if (curTool === 'distant' && activeDist) {
+                saveHistory(); activeDist.offsetLocked = true; selected = {type:'dim', item:activeDist}; measureInput.focus(); isDrawing = false;
+            } else if (curTool !== 'distant' || !activeDist) {
+                saveHistory();
+                if(curTool === 'measure') {
+                    const item = {x1:startX, y1:startY, x2:pos.x, y2:pos.y, val:measureInput.value || "100", color:currentColor, type:'measure'};
+                    dims.push(item); selected = {type:'dim', item}; measureInput.focus();
+                } else if (curTool === 'distant') {
+                    dims.push({x1:startX, y1:startY, x2:pos.x, y2:pos.y, val:measureInput.value || "100", color:currentColor, type:'distant', offsetLocked:false, offsetVec:{x:0,y:0}});
+                    return; 
+                } else if (curTool === 'comment') {
+                    const item = {x1:startX, y1:startY, x2:pos.x, y2:pos.y, text:commentInput.value || "", color:currentColor};
+                    comments.push(item); selected = {type:'com', item}; commentInput.focus();
+                }
+                isDrawing = false;
             }
-            isDrawing = false; render();
+            render();
         }
     };
 
@@ -253,11 +275,11 @@
         ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
         ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x1, y1, 6, 0, Math.PI*2); ctx.fill();
         if(isTemp) return;
-        ctx.font = "bold 18px Arial"; const lines = (text || "Comment").split('\n');
+        ctx.font = "bold 18px Arial"; const lines = (text || "").split('\n');
         let mw = 0; lines.forEach(l => mw = Math.max(mw, ctx.measureText(l).width));
-        const bh = lines.length * 26 + 25, bw = mw + 50;
+        const bh = lines.length * 26 + 25, bw = Math.max(50, mw + 50);
         const bx = x2 < x1 ? x2 - bw : x2, by = y2 < y1 ? y2 - bh : y2;
-        const cIdx = comments.findIndex(c => c.text === text);
+        const cIdx = comments.findIndex(c => c === (selected?.item || null) || c.text === text);
         if(cIdx !== -1) comments[cIdx].box = {x:bx, y:by, w:bw, h:bh};
         ctx.fillStyle = color; roundRect(ctx, bx, by, bw, bh, 12, true, false);
         ctx.fillStyle = (color.toLowerCase() === '#ffffff' || color === 'white') ? "black" : "white";
@@ -274,14 +296,8 @@
         if (fill) ctx.fill(); if (stroke) ctx.stroke();
     }
 
-    document.getElementById('clearAll').onclick = () => { dims=[]; comments=[]; deselect(); };
-    document.getElementById('download').onclick = () => { 
-        deselect(); render(); 
-        const link = document.createElement('a'); 
-        link.download = 'aik_markup.jpg'; 
-        link.href = canvas.toDataURL('image/jpeg', 1.0); 
-        link.click(); 
-    };
+    document.getElementById('clearAll').onclick = () => { saveHistory(); dims=[]; comments=[]; deselect(); };
+    document.getElementById('download').onclick = () => { deselect(); render(); const link = document.createElement('a'); link.download = 'aik_markup.jpg'; link.href = canvas.toDataURL('image/jpeg', 1.0); link.click(); };
 
     function render() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
