@@ -169,7 +169,7 @@
         const pos = getMouse(e);
         let found = null;
 
-        // selection search (Reverse order for top-most)
+        // Selection engine (Reverse order for top-most layer)
         for (let i = comments.length - 1; i >= 0; i--) {
             const c = comments[i];
             if(c.box && pos.x >= c.box.x && pos.x <= c.box.x + c.box.w && pos.y >= c.box.y && pos.y <= c.box.y + c.box.h) {
@@ -252,18 +252,15 @@
     measureInput.oninput = () => { if(selected?.type==='dim') { selected.item.val = measureInput.value; render(); }};
     commentInput.oninput = () => { if(selected?.type==='com') { selected.item.text = commentInput.value; render(); }};
 
-
     function drawMeasure(x1, y1, x2, y2, val, color, isTemp, dObj) {
         const ox = dObj?.offsetVec?.x || 0, oy = dObj?.offsetVec?.y || 0;
         const ax1 = x1 + ox, ay1 = y1 + oy, ax2 = x2 + ox, ay2 = y2 + oy;
-        
         if(dObj?.type === 'distant') {
             ctx.setLineDash([12, 10]); ctx.strokeStyle = color; ctx.lineWidth = 2;
             ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(ax1, ay1); ctx.stroke();
             ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(ax2, ay2); ctx.stroke();
             ctx.setLineDash([]);
         }
-        
         ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2); ctx.stroke();
         const ang = Math.atan2(ay2-ay1, ax2-ax1);
         const tick = (x, y) => {
@@ -271,43 +268,42 @@
             ctx.lineTo(x - Math.cos(ang + Math.PI/2) * 18, y - Math.sin(ang + Math.PI/2) * 18); ctx.stroke();
         };
         tick(ax1, ay1); tick(ax2, ay2);
-        
         const txt = (val || "100") + " cm", mx = (ax1+ax2)/2, my = (ay1+ay2)/2;
         ctx.font = "bold 18px Arial"; const tw = ctx.measureText(txt).width;
         
-        // Selection Highlight: Blue Outline
+        // Highlight logic
         if (selected?.item === dObj) {
             ctx.strokeStyle = "#007bff"; ctx.lineWidth = 3;
             roundRect(ctx, mx-tw/2-13, my-23, tw+26, 38, 8, false, true);
         }
-        
+
         ctx.fillStyle = "rgba(0,0,0,0.8)";
         roundRect(ctx, mx-tw/2-10, my-20, tw+20, 32, 6, true, false);
         ctx.fillStyle = color; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(txt, mx, my - 2);
     }
-    
+
     function drawComment(x1, y1, x2, y2, text, color, isTemp, cObj) {
         ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
         ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x1, y1, 6, 0, Math.PI*2); ctx.fill();
         if(isTemp) return;
-        
         ctx.font = "bold 18px Arial"; const lines = (text || "").split('\n');
         let mw = 0; lines.forEach(l => mw = Math.max(mw, ctx.measureText(l).width));
         const bh = lines.length * 26 + 25, bw = Math.max(50, mw + 50);
         const bx = x2 < x1 ? x2 - bw : x2, by = y2 < y1 ? y2 - bh : y2;
         
         if(cObj) cObj.box = {x:bx, y:by, w:bw, h:bh};
-    
-        // Selection Highlight: Blue Outline
+
+        // Blue Outline Highlight
         if (selected?.item === cObj) {
             ctx.strokeStyle = "#007bff"; ctx.lineWidth = 4;
             roundRect(ctx, bx - 4, by - 4, bw + 8, bh + 8, 14, false, true);
         }
-    
+
         ctx.fillStyle = color;
         roundRect(ctx, bx, by, bw, bh, 12, true, false);
         
-        ctx.fillStyle = (color.toLowerCase() === '#ffffff' || color === 'white' || color === 'rgb(255, 255, 255)') ? "black" : "white";
+        const lowCol = color.toLowerCase();
+        ctx.fillStyle = (lowCol === '#ffffff' || lowCol === 'white' || lowCol === 'rgb(255, 255, 255)') ? "black" : "white";
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         lines.forEach((l, i) => ctx.fillText(l, bx + bw/2, by + (bh / (lines.length + 1)) * (i + 1)));
     }
