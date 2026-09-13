@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Module>
+  <Name value="Aelfeyja Rescue"/>
+  <Id value="AelfeyjaRescue"/>
+  <Version value="v1.0.0"/>
+  <SingleplayerModule value="true"/>
+  <MultiplayerModule value="false"/>
+  <Official value="false"/>
+  <DependedModules>
+    <DependedModule Id="Native"/>
+    <DependedModule Id="SandBoxCore"/>
+    <DependedModule Id="Sandbox"/>
+    <DependedModule Id="CustomBattle"/>
+    <DependedModule Id="StoryMode"/>
+    <DependedModule Id="AIInfluence"/>
+  </DependedModules>
+  <SubModules>
+    <SubModule>
+      <Name value="Aelfeyja Rescue"/>
+      <DLLName value="AelfeyjaRescue.dll"/>
+      <SubModuleClassType value="AelfeyjaRescue.SubModule"/>
+      <Tags>
+        <Tag key="DedicatedServerType" value="none"/>
+        <Tag key="IsNoRenderModeElement" value="false"/>
+      </Tags>
+    </SubModule>
+  </SubModules>
+  <Xmls/>
+</Module>
