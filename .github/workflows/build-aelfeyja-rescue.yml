@@ -1,0 +1,45 @@
+name: Build Aelfeyja Rescue
+
+on:
+  push:
+    branches:
+      - aelfeyja-rescue-build
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore tmp/aelfeyja-rescue/AelfeyjaRescue.csproj
+
+      - name: Build
+        run: dotnet build tmp/aelfeyja-rescue/AelfeyjaRescue.csproj -c Release --no-restore
+
+      - name: Package Bannerlord module
+        shell: pwsh
+        run: |
+          $root = "dist/Modules/AelfeyjaRescue"
+          $bin = "$root/bin/Win64_Shipping_Client"
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Copy-Item "tmp/aelfeyja-rescue/SubModule.xml" "$root/SubModule.xml"
+          Copy-Item "tmp/aelfeyja-rescue/bin/Release/net472/AelfeyjaRescue.dll" "$bin/AelfeyjaRescue.dll"
+          if (Test-Path "tmp/aelfeyja-rescue/bin/Release/net472/AelfeyjaRescue.pdb") {
+            Copy-Item "tmp/aelfeyja-rescue/bin/Release/net472/AelfeyjaRescue.pdb" "$bin/AelfeyjaRescue.pdb"
+          }
+          Compress-Archive -Path "dist/Modules" -DestinationPath "dist/AelfeyjaRescue.zip" -Force
+
+      - name: Upload rescue mod
+        uses: actions/upload-artifact@v4
+        with:
+          name: AelfeyjaRescue
+          path: dist/AelfeyjaRescue.zip
+          if-no-files-found: error
