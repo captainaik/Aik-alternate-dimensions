@@ -1,0 +1,43 @@
+name: Build Aelfeyja Rescue
+
+on:
+  push:
+    branches:
+      - aelfeyja-rescue-build
+    paths:
+      - 'tmp/aelfeyja-rescue/**'
+      - '.github/workflows/aelfeyja-rescue.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore tmp/aelfeyja-rescue/AelfeyjaRescue.csproj
+
+      - name: Build
+        run: dotnet build tmp/aelfeyja-rescue/AelfeyjaRescue.csproj -c Release --no-restore
+
+      - name: Package Bannerlord module
+        shell: pwsh
+        run: |
+          $module = 'staging/AelfeyjaRescue'
+          New-Item -ItemType Directory -Force "$module/bin/Win64_Shipping_Client" | Out-Null
+          Copy-Item 'tmp/aelfeyja-rescue/SubModule.xml' "$module/SubModule.xml"
+          Copy-Item 'tmp/aelfeyja-rescue/bin/Release/net472/AelfeyjaRescue.dll' "$module/bin/Win64_Shipping_Client/AelfeyjaRescue.dll"
+          Compress-Archive -Path $module -DestinationPath 'AelfeyjaRescue.zip' -Force
+
+      - name: Upload module
+        uses: actions/upload-artifact@v4
+        with:
+          name: AelfeyjaRescue
+          path: AelfeyjaRescue.zip
+          if-no-files-found: error
