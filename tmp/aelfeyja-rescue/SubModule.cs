@@ -11,79 +11,88 @@ namespace AelfeyjaRescue
 {
 	public sealed class SubModule : MBSubModuleBase
 	{
+		private static DateTime _nextAttempt = DateTime.MinValue;
+		private static bool _autoRepairCompleted;
+
 		protected override void OnSubModuleLoad()
 		{
 			base.OnSubModuleLoad();
-			RescueService.LogPublic("Aelfeyja Rescue loaded. No automatic changes will be made. Use rescue.status / rescue.stop_follow / rescue.fix / rescue.hardfix.");
+			RescueService.LogPublic("Crash Rescue v1.1 loaded. Crash-dump target: western_mercenary_t4 / Leadership / null DefaultCharacterSkills.");
+		}
+
+		protected override void OnApplicationTick(float dt)
+		{
+			base.OnApplicationTick(dt);
+			if (_autoRepairCompleted || DateTime.UtcNow < _nextAttempt)
+				return;
+
+			_nextAttempt = DateTime.UtcNow.AddMilliseconds(100);
+			if (!RescueService.IsCampaignReady())
+				return;
+
+			string result = RescueService.RepairBrokenSkillTemplates(false);
+			if (result.IndexOf("CAMPAIGN_NOT_READY", StringComparison.Ordinal) < 0 &&
+				result.IndexOf("TARGET_NOT_FOUND", StringComparison.Ordinal) < 0)
+			{
+				_autoRepairCompleted = true;
+				RescueService.LogPublic("AUTO " + result);
+			}
 		}
 	}
 
 	public static class RescueCommands
 	{
+		[CommandLineFunctionality.CommandLineArgumentFunction("fix_skills", "rescue")]
+		public static string FixSkills(List<string> args)
+		{
+			return RescueService.RepairBrokenSkillTemplates(true);
+		}
+
+		[CommandLineFunctionality.CommandLineArgumentFunction("scan_skills", "rescue")]
+		public static string ScanSkills(List<string> args)
+		{
+			return RescueService.ScanBrokenSkillTemplates();
+		}
+
+		[CommandLineFunctionality.CommandLineArgumentFunction("scan_parties", "rescue")]
+		public static string ScanParties(List<string> args)
+		{
+			return RescueService.ScanParties();
+		}
+
 		[CommandLineFunctionality.CommandLineArgumentFunction("status", "rescue")]
 		public static string Status(List<string> args)
 		{
-			return RescueService.GetStatus();
-		}
-
-		[CommandLineFunctionality.CommandLineArgumentFunction("stop_follow", "rescue")]
-		public static string StopFollow(List<string> args)
-		{
-			return RescueService.StopFollowOnly();
-		}
-
-		[CommandLineFunctionality.CommandLineArgumentFunction("fix", "rescue")]
-		public static string Fix(List<string> args)
-		{
-			return RescueService.ConservativeFix();
-		}
-
-		[CommandLineFunctionality.CommandLineArgumentFunction("hardfix", "rescue")]
-		public static string HardFix(List<string> args)
-		{
-			return RescueService.HardFix();
-		}
-
-		[CommandLineFunctionality.CommandLineArgumentFunction("destroy_party", "rescue")]
-		public static string DestroyParty(List<string> args)
-		{
-			return RescueService.DestroyPartyOnly();
+			return RescueService.Status();
 		}
 	}
 
 	internal static class RescueService
 	{
-		private const string HeroId = "lord_7_5_2";
-		private const string ActionName = "follow_player";
+		private const string CrashTargetId = "western_mercenary_t4";
 		private static string _lastResult = "Not run yet.";
 
-		public static string GetStatus()
+		public static bool IsCampaignReady()
+		{
+			Type campaignType = FindType("TaleWorlds.CampaignSystem.Campaign");
+			if (campaignType == null)
+				return false;
+			object current = GetStaticMember(campaignType, "Current");
+			return current != null;
+		}
+
+		public static string Status()
 		{
 			try
 			{
-				if (!IsCampaignReady())
-					return Finish("Campaign is not ready yet.");
+				object target = FindCharacter(CrashTargetId);
+				if (target == null)
+					return Finish("TARGET_NOT_FOUND: " + CrashTargetId);
 
-				object hero = FindHero(HeroId);
-				if (hero == null)
-					return Finish("Aelfeyja (" + HeroId + ") was not found.");
-
-				object party = GetProperty(hero, "PartyBelongedTo");
-				object state = GetProperty(hero, "HeroState") ?? GetProperty(hero, "State");
-				if (party == null)
-					return Finish("Aelfeyja found. HeroState=" + SafeValue(state) + ", PartyBelongedTo=null. Last=" + _lastResult);
-
-				object mapEvent = GetProperty(party, "MapEvent");
-				object mapEventSide = GetProperty(party, "MapEventSide");
-				object ai = GetProperty(party, "Ai");
-				object targetParty = ai == null ? null : GetProperty(ai, "MoveTargetParty");
-
-				return Finish("Aelfeyja status: HeroState=" + SafeValue(state)
-					+ ", Party=" + SafeName(party)
-					+ ", IsActive=" + SafeValue(GetProperty(party, "IsActive"))
-					+ ", MapEvent=" + SafeName(mapEvent)
-					+ ", MapEventSide=" + SafeName(mapEventSide)
-					+ ", MoveTargetParty=" + SafeName(targetParty));
+				FieldInfo field = FindDefaultSkillsField(target.GetType());
+				object skills = field == null ? null : field.GetValue(target);
+				return Finish("Crash target=" + CrashTargetId + ", IsHero=" + SafeValue(GetProperty(target, "IsHero")) +
+					", DefaultCharacterSkills=" + (skills == null ? "NULL" : "OK") + ". Last=" + _lastResult);
 			}
 			catch (Exception ex)
 			{
@@ -91,430 +100,229 @@ namespace AelfeyjaRescue
 			}
 		}
 
-		public static string StopFollowOnly()
+		public static string ScanBrokenSkillTemplates()
 		{
 			try
 			{
-				object hero = FindHero(HeroId);
-				if (hero == null)
-					return Finish("Aelfeyja not found.");
+				if (!IsCampaignReady())
+					return Finish("CAMPAIGN_NOT_READY");
 
-				var notes = new List<string>();
-				bool stopped = TryStopAIInfluenceAction(hero, notes);
-				return Finish("STOP FOLLOW: StopAction=" + stopped + ". " + string.Join(" ", notes));
+				List<object> characters = GetAllCharacters().ToList();
+				var broken = new List<string>();
+				foreach (object c in characters)
+				{
+					if (c == null || IsHero(c))
+						continue;
+					FieldInfo f = FindDefaultSkillsField(c.GetType());
+					if (f != null && f.GetValue(c) == null)
+						broken.Add(GetStringId(c));
+				}
+
+				string ids = broken.Count == 0 ? "none" : string.Join(", ", broken.Take(25).ToArray());
+				return Finish("BROKEN_SKILLS=" + broken.Count + ": " + ids);
 			}
 			catch (Exception ex)
 			{
-				return Finish("STOP FOLLOW ERROR: " + Flatten(ex));
+				return Finish("SCAN ERROR: " + Flatten(ex));
 			}
 		}
 
-		public static string ConservativeFix()
+		public static string RepairBrokenSkillTemplates(bool verbose)
 		{
 			try
 			{
-				object hero = FindHero(HeroId);
-				if (hero == null)
-					return Finish("Aelfeyja not found.");
+				if (!IsCampaignReady())
+					return Finish("CAMPAIGN_NOT_READY");
 
-				var notes = new List<string>();
-				bool stopped = TryStopAIInfluenceAction(hero, notes);
-				bool repaired = RepairPartyMovement(hero, notes);
-				return Finish("CONSERVATIVE FIX: StopAction=" + stopped + ", PartyRepair=" + repaired + ". " + string.Join(" ", notes));
-			}
-			catch (Exception ex)
-			{
-				return Finish("FIX ERROR: " + Flatten(ex));
-			}
-		}
+				List<object> characters = GetAllCharacters().ToList();
+				object target = characters.FirstOrDefault(c => string.Equals(GetStringId(c), CrashTargetId, StringComparison.Ordinal));
+				if (target == null)
+					return Finish("TARGET_NOT_FOUND: " + CrashTargetId);
 
-		public static string HardFix()
-		{
-			try
-			{
-				object hero = FindHero(HeroId);
-				if (hero == null)
-					return Finish("Aelfeyja not found. No changes made.");
+				FieldInfo field = FindDefaultSkillsField(target.GetType());
+				if (field == null)
+					return Finish("Could not locate BasicCharacterObject.DefaultCharacterSkills field.");
 
-				var notes = new List<string>();
-				notes.Add("Target=" + HeroId + ".");
+				object preferredDonor = FindDonor(characters, field);
+				if (preferredDonor == null)
+					return Finish("No valid skill-template donor could be found. No changes made.");
 
-				bool stopped = TryStopAIInfluenceAction(hero, notes);
-				object oldParty = GetProperty(hero, "PartyBelongedTo");
-				if (oldParty != null)
-					notes.Add("Existing party=" + SafeName(oldParty) + ".");
-				else
-					notes.Add("PartyBelongedTo already null.");
-
-				bool fugitive = TryMakeHeroFugitive(hero, notes);
-				object newParty = GetProperty(hero, "PartyBelongedTo");
-				bool detached = newParty == null;
-
-				if (!fugitive && oldParty != null)
+				object donorSkills = field.GetValue(preferredDonor);
+				var repaired = new List<string>();
+				foreach (object c in characters)
 				{
-					notes.Add("MakeHeroFugitiveAction unavailable/failed; trying DestroyPartyAction fallback.");
-					bool destroyed = TryDestroyParty(oldParty, notes);
-					newParty = GetProperty(hero, "PartyBelongedTo");
-					detached = destroyed || newParty == null;
-				}
-
-				return Finish("HARD FIX: StopAction=" + stopped
-					+ ", MakeFugitive=" + fugitive
-					+ ", PartyDetached=" + detached
-					+ ". " + string.Join(" ", notes));
-			}
-			catch (Exception ex)
-			{
-				return Finish("HARD FIX ERROR: " + Flatten(ex));
-			}
-		}
-
-		public static string DestroyPartyOnly()
-		{
-			try
-			{
-				object hero = FindHero(HeroId);
-				if (hero == null)
-					return Finish("Aelfeyja not found. No changes made.");
-
-				object party = GetProperty(hero, "PartyBelongedTo");
-				if (party == null)
-					return Finish("Aelfeyja has no party; nothing to destroy.");
-
-				var notes = new List<string>();
-				TryStopAIInfluenceAction(hero, notes);
-				bool destroyed = TryDestroyParty(party, notes);
-				return Finish("DESTROY PARTY: Success=" + destroyed + ". " + string.Join(" ", notes));
-			}
-			catch (Exception ex)
-			{
-				return Finish("DESTROY PARTY ERROR: " + Flatten(ex));
-			}
-		}
-
-		private static bool IsCampaignReady()
-		{
-			Type campaignType = FindType("TaleWorlds.CampaignSystem.Campaign");
-			if (campaignType == null)
-				return false;
-
-			PropertyInfo current = campaignType.GetProperty("Current", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-			return current != null && current.GetValue(null, null) != null;
-		}
-
-		private static object FindHero(string stringId)
-		{
-			Type heroType = FindType("TaleWorlds.CampaignSystem.Hero");
-			if (heroType != null)
-			{
-				foreach (string propertyName in new[] { "AllAliveHeroes", "AllHeroes", "All" })
-				{
-					PropertyInfo p = heroType.GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-					object heroes = p == null ? null : SafeGetValue(p, null);
-					object found = FindHeroInEnumerable(heroes as IEnumerable, stringId);
-					if (found != null)
-						return found;
-				}
-			}
-
-			Type campaignType = FindType("TaleWorlds.CampaignSystem.Campaign");
-			object campaign = campaignType == null ? null : GetStaticMember(campaignType, "Current");
-			if (campaign != null)
-			{
-				foreach (string propertyName in new[] { "AliveHeroes", "Heroes" })
-				{
-					object found = FindHeroInEnumerable(GetProperty(campaign, propertyName) as IEnumerable, stringId);
-					if (found != null)
-						return found;
-				}
-			}
-
-			return null;
-		}
-
-		private static object FindHeroInEnumerable(IEnumerable heroes, string stringId)
-		{
-			if (heroes == null)
-				return null;
-
-			foreach (object hero in heroes)
-			{
-				if (hero == null)
-					continue;
-				object id = GetProperty(hero, "StringId");
-				if (id != null && string.Equals(id.ToString(), stringId, StringComparison.Ordinal))
-					return hero;
-			}
-			return null;
-		}
-
-		private static bool TryStopAIInfluenceAction(object hero, List<string> notes)
-		{
-			try
-			{
-				Type managerType = AppDomain.CurrentDomain.GetAssemblies()
-					.SelectMany(SafeGetTypes)
-					.FirstOrDefault(t => t != null && t.Name == "AIActionManager" && t.FullName != null && t.FullName.IndexOf("AIInfluence", StringComparison.OrdinalIgnoreCase) >= 0);
-
-				if (managerType == null)
-				{
-					notes.Add("AIActionManager is not loaded (AI Influence may be disabled). ");
-					return false;
-				}
-
-				object manager = GetStaticMember(managerType, "Instance")
-					?? GetStaticMember(managerType, "_instance")
-					?? GetStaticMember(managerType, "instance");
-
-				foreach (MethodInfo method in managerType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static).Where(m => m.Name == "StopAction"))
-				{
-					ParameterInfo[] ps = method.GetParameters();
-					object[] callArgs = new object[ps.Length];
-					bool heroAssigned = false;
-					bool actionAssigned = false;
-					bool compatible = true;
-
-					for (int i = 0; i < ps.Length; i++)
-					{
-						Type pt = ps[i].ParameterType;
-						if (!heroAssigned && pt.IsInstanceOfType(hero))
-						{
-							callArgs[i] = hero;
-							heroAssigned = true;
-						}
-						else if (!actionAssigned && pt == typeof(string))
-						{
-							callArgs[i] = ActionName;
-							actionAssigned = true;
-						}
-						else if (pt == typeof(bool))
-						{
-							callArgs[i] = true;
-						}
-						else if (ps[i].HasDefaultValue)
-						{
-							callArgs[i] = ps[i].DefaultValue;
-						}
-						else if (!pt.IsValueType)
-						{
-							callArgs[i] = null;
-						}
-						else
-						{
-							compatible = false;
-							break;
-						}
-					}
-
-					if (!compatible || !heroAssigned || !actionAssigned || (!method.IsStatic && manager == null))
+					if (c == null || IsHero(c))
+						continue;
+					FieldInfo cf = FindDefaultSkillsField(c.GetType());
+					if (cf == null || cf.GetValue(c) != null)
 						continue;
 
-					method.Invoke(method.IsStatic ? null : manager, callArgs);
-					notes.Add("AI Influence StopAction(follow_player) invoked.");
-					return true;
+					cf.SetValue(c, donorSkills);
+					repaired.Add(GetStringId(c));
 				}
 
-				notes.Add("No compatible AI Influence StopAction overload found.");
-				return false;
+				bool targetOk = field.GetValue(target) != null;
+				string verification = VerifyLeadershipLookup(target);
+				string result = "SKILL REPAIR: repaired=" + repaired.Count +
+					", target=" + CrashTargetId + "=" + (targetOk ? "OK" : "STILL_NULL") +
+					", donor=" + GetStringId(preferredDonor) +
+					", LeadershipTest=" + verification +
+					". IDs=" + (repaired.Count == 0 ? "none" : string.Join(",", repaired.Take(20).ToArray()));
+				return Finish(result);
 			}
 			catch (Exception ex)
 			{
-				notes.Add("StopAction failed: " + Flatten(ex));
-				return false;
+				return Finish("SKILL REPAIR ERROR: " + Flatten(ex));
 			}
 		}
 
-		private static bool RepairPartyMovement(object hero, List<string> notes)
-		{
-			object party = GetProperty(hero, "PartyBelongedTo");
-			if (party == null)
-			{
-				notes.Add("Aelfeyja has no party.");
-				return true;
-			}
-
-			bool changed = false;
-			object ai = GetProperty(party, "Ai");
-			if (ai != null && InvokeNamed(ai, "SetDoNotMakeNewDecisions", new object[] { false }))
-			{
-				notes.Add("Normal party AI decisions re-enabled.");
-				changed = true;
-			}
-
-			if (ai != null && InvokeNamed(ai, "SetMoveModeHold", new object[0]))
-			{
-				notes.Add("AI SetMoveModeHold invoked.");
-				changed = true;
-			}
-			else if (InvokeNamed(party, "SetMoveModeHold", new object[0]))
-			{
-				notes.Add("Party SetMoveModeHold invoked.");
-				changed = true;
-			}
-
-			return changed;
-		}
-
-		private static bool TryMakeHeroFugitive(object hero, List<string> notes)
+		public static string ScanParties()
 		{
 			try
 			{
-				Type actionType = FindType("TaleWorlds.CampaignSystem.Actions.MakeHeroFugitiveAction");
-				if (actionType == null)
+				if (!IsCampaignReady())
+					return Finish("CAMPAIGN_NOT_READY");
+
+				IEnumerable parties = GetAllParties();
+				if (parties == null)
+					return Finish("Could not enumerate mobile parties.");
+
+				var hits = new List<string>();
+				foreach (object p in parties)
 				{
-					notes.Add("MakeHeroFugitiveAction type not found.");
-					return false;
-				}
-
-				foreach (MethodInfo method in actionType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static).Where(m => m.Name == "Apply"))
-				{
-					ParameterInfo[] ps = method.GetParameters();
-					object[] callArgs = new object[ps.Length];
-					bool heroAssigned = false;
-					bool compatible = true;
-
-					for (int i = 0; i < ps.Length; i++)
-					{
-						Type pt = ps[i].ParameterType;
-						if (!heroAssigned && pt.IsInstanceOfType(hero))
-						{
-							callArgs[i] = hero;
-							heroAssigned = true;
-						}
-						else if (pt == typeof(bool))
-						{
-							callArgs[i] = false;
-						}
-						else if (ps[i].HasDefaultValue)
-						{
-							callArgs[i] = ps[i].DefaultValue;
-						}
-						else if (!pt.IsValueType)
-						{
-							callArgs[i] = null;
-						}
-						else
-						{
-							compatible = false;
-							break;
-						}
-					}
-
-					if (!compatible || !heroAssigned)
+					if (p == null)
 						continue;
-
-					method.Invoke(null, callArgs);
-					notes.Add("Bannerlord MakeHeroFugitiveAction.Apply invoked.");
-					return true;
+					object roster = GetProperty(p, "MemberRoster");
+					if (roster == null)
+						continue;
+					bool contains = RosterContains(roster, CrashTargetId);
+					if (!contains)
+						continue;
+					string pname = SafeName(p);
+					string pid = SafeValue(GetProperty(p, "StringId"));
+					string leader = SafeName(GetProperty(p, "LeaderHero"));
+					hits.Add(pname + "[" + pid + "] leader=" + leader);
 				}
 
-				notes.Add("No compatible MakeHeroFugitiveAction.Apply overload found.");
-				return false;
+				return Finish("PARTIES_WITH_" + CrashTargetId + "=" + hits.Count + ": " + (hits.Count == 0 ? "none" : string.Join(" | ", hits.Take(15).ToArray())));
 			}
 			catch (Exception ex)
 			{
-				notes.Add("MakeHeroFugitiveAction failed: " + Flatten(ex));
-				return false;
+				return Finish("PARTY SCAN ERROR: " + Flatten(ex));
 			}
 		}
 
-		private static bool TryDestroyParty(object party, List<string> notes)
+		private static object FindDonor(List<object> characters, FieldInfo field)
+		{
+			string[] preferred = { "western_mercenary_t5", "western_mercenary", "western_crossbow_t4", "vlandian_infantry" };
+			foreach (string id in preferred)
+			{
+				object c = characters.FirstOrDefault(x => string.Equals(GetStringId(x), id, StringComparison.Ordinal));
+				if (c != null && !IsHero(c) && field.GetValue(c) != null)
+					return c;
+			}
+			return characters.FirstOrDefault(c => c != null && !IsHero(c) && field.GetValue(c) != null);
+		}
+
+		private static string VerifyLeadershipLookup(object character)
 		{
 			try
 			{
-				if (party == null)
-					return true;
+				Type defaultSkills = FindType("TaleWorlds.Core.DefaultSkills");
+				object leadership = defaultSkills == null ? null : GetStaticMember(defaultSkills, "Leadership");
+				if (leadership == null)
+					return "skill_object_not_found";
 
-				Type actionType = FindType("TaleWorlds.CampaignSystem.Actions.DestroyPartyAction");
-				if (actionType == null)
-				{
-					notes.Add("DestroyPartyAction type not found.");
-					return false;
-				}
-
-				foreach (MethodInfo method in actionType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static).Where(m => m.Name == "Apply"))
-				{
-					ParameterInfo[] ps = method.GetParameters();
-					object[] callArgs = new object[ps.Length];
-					bool partyAssigned = false;
-					bool compatible = true;
-
-					for (int i = 0; i < ps.Length; i++)
-					{
-						Type pt = ps[i].ParameterType;
-						if (!partyAssigned && pt.IsInstanceOfType(party))
-						{
-							callArgs[i] = party;
-							partyAssigned = true;
-						}
-						else if (pt == typeof(bool))
-						{
-							callArgs[i] = false;
-						}
-						else if (ps[i].HasDefaultValue)
-						{
-							callArgs[i] = ps[i].DefaultValue;
-						}
-						else if (!pt.IsValueType)
-						{
-							callArgs[i] = null;
-						}
-						else
-						{
-							compatible = false;
-							break;
-						}
-					}
-
-					if (!compatible || !partyAssigned)
-						continue;
-
-					method.Invoke(null, callArgs);
-					notes.Add("Bannerlord DestroyPartyAction.Apply invoked for " + SafeName(party) + ".");
-					return true;
-				}
-
-				notes.Add("No compatible DestroyPartyAction.Apply overload found.");
-				return false;
+				MethodInfo m = character.GetType().GetMethod("GetSkillValue", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+				if (m == null)
+					return "method_not_found";
+				object value = m.Invoke(character, new[] { leadership });
+				return value == null ? "null" : value.ToString();
 			}
 			catch (Exception ex)
 			{
-				notes.Add("DestroyPartyAction failed: " + Flatten(ex));
-				return false;
+				return "FAILED:" + Flatten(ex);
 			}
 		}
 
-		private static bool InvokeNamed(object target, string name, object[] args)
+		private static bool RosterContains(object roster, string characterId)
 		{
-			if (target == null)
-				return false;
-
-			foreach (MethodInfo method in target.GetType().GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).Where(m => m.Name == name && m.GetParameters().Length == args.Length))
+			try
 			{
-				try
+				MethodInfo getRoster = roster.GetType().GetMethod("GetTroopRoster", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+				IEnumerable entries = getRoster == null ? null : getRoster.Invoke(roster, null) as IEnumerable;
+				if (entries == null)
+					return false;
+				foreach (object entry in entries)
 				{
-					method.Invoke(target, args);
-					return true;
+					object ch = GetProperty(entry, "Character");
+					if (ch != null && string.Equals(GetStringId(ch), characterId, StringComparison.Ordinal))
+						return true;
 				}
-				catch { }
 			}
+			catch { }
 			return false;
 		}
 
-		private static object GetStaticMember(Type type, string name)
+		private static IEnumerable GetAllParties()
 		{
-			PropertyInfo p = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-			if (p != null)
+			Type mobilePartyType = FindType("TaleWorlds.CampaignSystem.Party.MobileParty");
+			if (mobilePartyType != null)
 			{
-				try { return p.GetValue(null, null); } catch { }
+				object all = GetStaticMember(mobilePartyType, "All");
+				if (all is IEnumerable)
+					return (IEnumerable)all;
 			}
+			object campaign = GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current");
+			return campaign == null ? null : GetProperty(campaign, "MobileParties") as IEnumerable;
+		}
 
-			FieldInfo f = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-			if (f != null)
+		private static IEnumerable<object> GetAllCharacters()
+		{
+			Type characterType = FindType("TaleWorlds.CampaignSystem.CharacterObject");
+			if (characterType != null)
 			{
-				try { return f.GetValue(null); } catch { }
+				object all = GetStaticMember(characterType, "All");
+				if (all is IEnumerable)
+				{
+					foreach (object c in (IEnumerable)all)
+						yield return c;
+					yield break;
+				}
+			}
+			object campaign = GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current");
+			IEnumerable chars = campaign == null ? null : GetProperty(campaign, "Characters") as IEnumerable;
+			if (chars != null)
+				foreach (object c in chars)
+					yield return c;
+		}
+
+		private static object FindCharacter(string id)
+		{
+			return GetAllCharacters().FirstOrDefault(c => string.Equals(GetStringId(c), id, StringComparison.Ordinal));
+		}
+
+		private static FieldInfo FindDefaultSkillsField(Type type)
+		{
+			for (Type t = type; t != null; t = t.BaseType)
+			{
+				FieldInfo f = t.GetField("DefaultCharacterSkills", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+				if (f != null)
+					return f;
 			}
 			return null;
+		}
+
+		private static bool IsHero(object c)
+		{
+			object v = GetProperty(c, "IsHero");
+			return v is bool && (bool)v;
+		}
+
+		private static string GetStringId(object obj)
+		{
+			object id = GetProperty(obj, "StringId");
+			return id == null ? "<null-id>" : id.ToString();
 		}
 
 		private static object GetProperty(object obj, string name)
@@ -524,55 +332,56 @@ namespace AelfeyjaRescue
 			PropertyInfo p = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
 			if (p == null)
 				return null;
-			return SafeGetValue(p, obj);
+			try { return p.GetValue(obj, null); } catch { return null; }
 		}
 
-		private static object SafeGetValue(PropertyInfo property, object target)
+		private static object GetStaticMember(Type type, string name)
 		{
-			try { return property.GetValue(target, null); }
-			catch { return null; }
+			if (type == null)
+				return null;
+			PropertyInfo p = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+			if (p != null)
+			{
+				try { return p.GetValue(null, null); } catch { }
+			}
+			FieldInfo f = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+			if (f != null)
+			{
+				try { return f.GetValue(null); } catch { }
+			}
+			return null;
 		}
 
 		private static Type FindType(string fullName)
 		{
-			foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+			foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
 			{
 				try
 				{
-					Type type = assembly.GetType(fullName, false);
-					if (type != null)
-						return type;
+					Type t = a.GetType(fullName, false);
+					if (t != null)
+						return t;
 				}
 				catch { }
 			}
 			return null;
 		}
 
-		private static IEnumerable<Type> SafeGetTypes(Assembly assembly)
-		{
-			try { return assembly.GetTypes(); }
-			catch (ReflectionTypeLoadException ex) { return ex.Types.Where(t => t != null); }
-			catch { return Enumerable.Empty<Type>(); }
-		}
-
 		private static string SafeName(object obj)
 		{
 			if (obj == null)
 				return "null";
-			object name = GetProperty(obj, "Name");
-			return name == null ? obj.GetType().Name : name.ToString();
+			try
+			{
+				object name = GetProperty(obj, "Name");
+				return name == null ? GetStringId(obj) : name.ToString();
+			}
+			catch { return obj.GetType().Name; }
 		}
 
-		private static string SafeValue(object value)
+		private static string SafeValue(object obj)
 		{
-			return value == null ? "null" : value.ToString();
-		}
-
-		private static string Finish(string message)
-		{
-			_lastResult = message;
-			LogPublic(message);
-			return message;
+			return obj == null ? "null" : obj.ToString();
 		}
 
 		private static string Flatten(Exception ex)
@@ -582,13 +391,19 @@ namespace AelfeyjaRescue
 			return ex.GetType().Name + ": " + ex.Message;
 		}
 
+		private static string Finish(string message)
+		{
+			_lastResult = message;
+			LogPublic(message);
+			return message;
+		}
+
 		public static void LogPublic(string message)
 		{
 			try
 			{
 				string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-				DirectoryInfo parent = Directory.GetParent(baseDir);
-				string root = parent != null && parent.Parent != null ? parent.Parent.FullName : baseDir;
+				string root = Directory.GetParent(baseDir)?.Parent?.FullName ?? baseDir;
 				string moduleDir = Path.Combine(root, "Modules", "AelfeyjaRescue");
 				Directory.CreateDirectory(moduleDir);
 				File.AppendAllText(Path.Combine(moduleDir, "rescue.log"), "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] " + message + Environment.NewLine);
