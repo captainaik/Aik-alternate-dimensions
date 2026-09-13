@@ -11,344 +11,289 @@ namespace AelfeyjaRescue
 {
 	public sealed class SubModule : MBSubModuleBase
 	{
-		private static DateTime _nextAttempt = DateTime.MinValue;
-		private static bool _autoRepairCompleted;
-
 		protected override void OnSubModuleLoad()
 		{
 			base.OnSubModuleLoad();
-			RescueService.LogPublic("Crash Rescue v1.1 loaded. Crash-dump target: western_mercenary_t4 / Leadership / null DefaultCharacterSkills.");
-		}
-
-		protected override void OnApplicationTick(float dt)
-		{
-			base.OnApplicationTick(dt);
-			if (_autoRepairCompleted || DateTime.UtcNow < _nextAttempt)
-				return;
-
-			_nextAttempt = DateTime.UtcNow.AddMilliseconds(100);
-			if (!RescueService.IsCampaignReady())
-				return;
-
-			string result = RescueService.RepairBrokenSkillTemplates(false);
-			if (result.IndexOf("CAMPAIGN_NOT_READY", StringComparison.Ordinal) < 0 &&
-				result.IndexOf("TARGET_NOT_FOUND", StringComparison.Ordinal) < 0)
-			{
-				_autoRepairCompleted = true;
-				RescueService.LogPublic("AUTO " + result);
-			}
+			CharacterScanner.Log("Character Crash Scanner v1.2 loaded. No automatic repairs are performed.");
 		}
 	}
 
 	public static class RescueCommands
 	{
-		[CommandLineFunctionality.CommandLineArgumentFunction("fix_skills", "rescue")]
-		public static string FixSkills(List<string> args)
+		[CommandLineFunctionality.CommandLineArgumentFunction("scan_chars", "rescue")]
+		public static string ScanChars(List<string> args)
 		{
-			return RescueService.RepairBrokenSkillTemplates(true);
-		}
-
-		[CommandLineFunctionality.CommandLineArgumentFunction("scan_skills", "rescue")]
-		public static string ScanSkills(List<string> args)
-		{
-			return RescueService.ScanBrokenSkillTemplates();
+			return CharacterScanner.ScanAllCharacters();
 		}
 
 		[CommandLineFunctionality.CommandLineArgumentFunction("scan_parties", "rescue")]
 		public static string ScanParties(List<string> args)
 		{
-			return RescueService.ScanParties();
+			return CharacterScanner.ScanAllPartyRosters();
 		}
 
-		[CommandLineFunctionality.CommandLineArgumentFunction("status", "rescue")]
-		public static string Status(List<string> args)
+		[CommandLineFunctionality.CommandLineArgumentFunction("scan_all", "rescue")]
+		public static string ScanAll(List<string> args)
 		{
-			return RescueService.Status();
+			string a = CharacterScanner.ScanAllCharacters();
+			string b = CharacterScanner.ScanAllPartyRosters();
+			return a + " | " + b;
+		}
+
+		[CommandLineFunctionality.CommandLineArgumentFunction("scan_char", "rescue")]
+		public static string ScanChar(List<string> args)
+		{
+			if (args == null || args.Count == 0)
+				return "Usage: rescue.scan_char <CharacterObject StringId>";
+			return CharacterScanner.ScanOne(args[0]);
 		}
 	}
 
-	internal static class RescueService
+	internal static class CharacterScanner
 	{
-		private const string CrashTargetId = "western_mercenary_t4";
-		private static string _lastResult = "Not run yet.";
+		private static readonly BindingFlags InstanceFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+		private static readonly BindingFlags StaticFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
 
-		public static bool IsCampaignReady()
-		{
-			Type campaignType = FindType("TaleWorlds.CampaignSystem.Campaign");
-			if (campaignType == null)
-				return false;
-			object current = GetStaticMember(campaignType, "Current");
-			return current != null;
-		}
-
-		public static string Status()
+		public static string ScanAllCharacters()
 		{
 			try
 			{
-				object target = FindCharacter(CrashTargetId);
-				if (target == null)
-					return Finish("TARGET_NOT_FOUND: " + CrashTargetId);
+				if (!CampaignReady())
+					return "CAMPAIGN_NOT_READY";
 
-				FieldInfo field = FindDefaultSkillsField(target.GetType());
-				object skills = field == null ? null : field.GetValue(target);
-				return Finish("Crash target=" + CrashTargetId + ", IsHero=" + SafeValue(GetProperty(target, "IsHero")) +
-					", DefaultCharacterSkills=" + (skills == null ? "NULL" : "OK") + ". Last=" + _lastResult);
-			}
-			catch (Exception ex)
-			{
-				return Finish("STATUS ERROR: " + Flatten(ex));
-			}
-		}
+				List<object> characters = GetAllCharacters().Where(x => x != null).ToList();
+				List<ScanResult> bad = new List<ScanResult>();
+				int heroCount = 0;
+				int regularCount = 0;
 
-		public static string ScanBrokenSkillTemplates()
-		{
-			try
-			{
-				if (!IsCampaignReady())
-					return Finish("CAMPAIGN_NOT_READY");
+				Log("===== CHARACTER SCAN START =====");
+				Log("Characters enumerated: " + characters.Count);
 
-				List<object> characters = GetAllCharacters().ToList();
-				var broken = new List<string>();
 				foreach (object c in characters)
 				{
-					if (c == null || IsHero(c))
-						continue;
-					FieldInfo f = FindDefaultSkillsField(c.GetType());
-					if (f != null && f.GetValue(c) == null)
-						broken.Add(GetStringId(c));
+					ScanResult r = InspectCharacter(c);
+					if (r.IsHero) heroCount++; else regularCount++;
+					if (r.Flags.Count > 0)
+					{
+						bad.Add(r);
+						Log(r.ToLogLine());
+					}
 				}
 
-				string ids = broken.Count == 0 ? "none" : string.Join(", ", broken.Take(25).ToArray());
-				return Finish("BROKEN_SKILLS=" + broken.Count + ": " + ids);
+				Log("Summary: heroes=" + heroCount + ", regular=" + regularCount + ", flagged=" + bad.Count);
+				Log("===== CHARACTER SCAN END =====");
+
+				string top = bad.Count == 0 ? "none" : string.Join(", ", bad.Take(20).Select(x => x.Id + "[" + string.Join("+", x.Flags.ToArray()) + "]").ToArray());
+				return "CHAR_SCAN total=" + characters.Count + ", heroes=" + heroCount + ", regular=" + regularCount + ", flagged=" + bad.Count + ". " + top;
 			}
 			catch (Exception ex)
 			{
-				return Finish("SCAN ERROR: " + Flatten(ex));
+				Log("CHAR_SCAN ERROR: " + Flatten(ex));
+				return "CHAR_SCAN ERROR: " + Flatten(ex);
 			}
 		}
 
-		public static string RepairBrokenSkillTemplates(bool verbose)
+		public static string ScanAllPartyRosters()
 		{
 			try
 			{
-				if (!IsCampaignReady())
-					return Finish("CAMPAIGN_NOT_READY");
-
-				List<object> characters = GetAllCharacters().ToList();
-				object target = characters.FirstOrDefault(c => string.Equals(GetStringId(c), CrashTargetId, StringComparison.Ordinal));
-				if (target == null)
-					return Finish("TARGET_NOT_FOUND: " + CrashTargetId);
-
-				FieldInfo field = FindDefaultSkillsField(target.GetType());
-				if (field == null)
-					return Finish("Could not locate BasicCharacterObject.DefaultCharacterSkills field.");
-
-				object preferredDonor = FindDonor(characters, field);
-				if (preferredDonor == null)
-					return Finish("No valid skill-template donor could be found. No changes made.");
-
-				object donorSkills = field.GetValue(preferredDonor);
-				var repaired = new List<string>();
-				foreach (object c in characters)
-				{
-					if (c == null || IsHero(c))
-						continue;
-					FieldInfo cf = FindDefaultSkillsField(c.GetType());
-					if (cf == null || cf.GetValue(c) != null)
-						continue;
-
-					cf.SetValue(c, donorSkills);
-					repaired.Add(GetStringId(c));
-				}
-
-				bool targetOk = field.GetValue(target) != null;
-				string verification = VerifyLeadershipLookup(target);
-				string result = "SKILL REPAIR: repaired=" + repaired.Count +
-					", target=" + CrashTargetId + "=" + (targetOk ? "OK" : "STILL_NULL") +
-					", donor=" + GetStringId(preferredDonor) +
-					", LeadershipTest=" + verification +
-					". IDs=" + (repaired.Count == 0 ? "none" : string.Join(",", repaired.Take(20).ToArray()));
-				return Finish(result);
-			}
-			catch (Exception ex)
-			{
-				return Finish("SKILL REPAIR ERROR: " + Flatten(ex));
-			}
-		}
-
-		public static string ScanParties()
-		{
-			try
-			{
-				if (!IsCampaignReady())
-					return Finish("CAMPAIGN_NOT_READY");
+				if (!CampaignReady())
+					return "CAMPAIGN_NOT_READY";
 
 				IEnumerable parties = GetAllParties();
 				if (parties == null)
-					return Finish("Could not enumerate mobile parties.");
+					return "PARTY_ENUMERATION_FAILED";
 
-				var hits = new List<string>();
-				foreach (object p in parties)
+				int partyCount = 0;
+				int rosterEntries = 0;
+				List<string> badHits = new List<string>();
+				HashSet<string> uniqueBad = new HashSet<string>(StringComparer.Ordinal);
+
+				Log("===== PARTY ROSTER SCAN START =====");
+				foreach (object party in parties)
 				{
-					if (p == null)
-						continue;
-					object roster = GetProperty(p, "MemberRoster");
-					if (roster == null)
-						continue;
-					bool contains = RosterContains(roster, CrashTargetId);
-					if (!contains)
-						continue;
-					string pname = SafeName(p);
-					string pid = SafeValue(GetProperty(p, "StringId"));
-					string leader = SafeName(GetProperty(p, "LeaderHero"));
-					hits.Add(pname + "[" + pid + "] leader=" + leader);
+					if (party == null) continue;
+					partyCount++;
+					string partyId = GetStringId(party);
+
+					foreach (string rosterName in new[] { "MemberRoster", "PrisonRoster" })
+					{
+						object roster = GetProperty(party, rosterName);
+						if (roster == null) continue;
+						foreach (object character in EnumerateRosterCharacters(roster))
+						{
+							if (character == null) continue;
+							rosterEntries++;
+							ScanResult r = InspectCharacter(character);
+							if (r.Flags.Count == 0) continue;
+							uniqueBad.Add(r.Id);
+							string hit = "party=" + partyId + " roster=" + rosterName + " char=" + r.Id + " flags=" + string.Join("+", r.Flags.ToArray());
+							badHits.Add(hit);
+							Log("BAD_ROSTER_ENTRY " + hit);
+						}
+					}
 				}
 
-				return Finish("PARTIES_WITH_" + CrashTargetId + "=" + hits.Count + ": " + (hits.Count == 0 ? "none" : string.Join(" | ", hits.Take(15).ToArray())));
+				Log("Summary: parties=" + partyCount + ", rosterEntries=" + rosterEntries + ", badHits=" + badHits.Count + ", uniqueBad=" + uniqueBad.Count);
+				Log("===== PARTY ROSTER SCAN END =====");
+
+				string sample = badHits.Count == 0 ? "none" : string.Join(" | ", badHits.Take(12).ToArray());
+				return "PARTY_SCAN parties=" + partyCount + ", entries=" + rosterEntries + ", badHits=" + badHits.Count + ", uniqueBad=" + uniqueBad.Count + ". " + sample;
 			}
 			catch (Exception ex)
 			{
-				return Finish("PARTY SCAN ERROR: " + Flatten(ex));
+				Log("PARTY_SCAN ERROR: " + Flatten(ex));
+				return "PARTY_SCAN ERROR: " + Flatten(ex);
 			}
 		}
 
-		private static object FindDonor(List<object> characters, FieldInfo field)
-		{
-			string[] preferred = { "western_mercenary_t5", "western_mercenary", "western_crossbow_t4", "vlandian_infantry" };
-			foreach (string id in preferred)
-			{
-				object c = characters.FirstOrDefault(x => string.Equals(GetStringId(x), id, StringComparison.Ordinal));
-				if (c != null && !IsHero(c) && field.GetValue(c) != null)
-					return c;
-			}
-			return characters.FirstOrDefault(c => c != null && !IsHero(c) && field.GetValue(c) != null);
-		}
-
-		private static string VerifyLeadershipLookup(object character)
+		public static string ScanOne(string id)
 		{
 			try
 			{
-				Type defaultSkills = FindType("TaleWorlds.Core.DefaultSkills");
-				object leadership = defaultSkills == null ? null : GetStaticMember(defaultSkills, "Leadership");
-				if (leadership == null)
-					return "skill_object_not_found";
-
-				MethodInfo m = character.GetType().GetMethod("GetSkillValue", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-				if (m == null)
-					return "method_not_found";
-				object value = m.Invoke(character, new[] { leadership });
-				return value == null ? "null" : value.ToString();
+				object c = GetAllCharacters().FirstOrDefault(x => string.Equals(GetStringId(x), id, StringComparison.Ordinal));
+				if (c == null)
+					return "NOT_FOUND: " + id;
+				ScanResult r = InspectCharacter(c);
+				Log("MANUAL_SCAN " + r.ToLogLine());
+				return r.ToLogLine();
 			}
 			catch (Exception ex)
 			{
-				return "FAILED:" + Flatten(ex);
+				return "SCAN_ONE ERROR: " + Flatten(ex);
 			}
 		}
 
-		private static bool RosterContains(object roster, string characterId)
+		private static ScanResult InspectCharacter(object c)
 		{
-			try
+			ScanResult r = new ScanResult();
+			r.Id = GetStringId(c);
+
+			FieldInfo heroField = FindField(c.GetType(), "_heroObject");
+			object hero = SafeFieldGet(heroField, c);
+			r.IsHero = hero != null;
+
+			FieldInfo defaultSkillsField = FindField(c.GetType(), "DefaultCharacterSkills");
+			object defaultSkills = SafeFieldGet(defaultSkillsField, c);
+			r.DefaultSkillsState = defaultSkillsField == null ? "FIELD_NOT_FOUND" : (defaultSkills == null ? "NULL" : "OK");
+
+			if (defaultSkillsField == null)
+				r.Flags.Add("DEFAULT_SKILLS_FIELD_MISSING");
+			else if (defaultSkills == null)
+				r.Flags.Add("DEFAULT_SKILLS_NULL");
+			else
 			{
-				MethodInfo getRoster = roster.GetType().GetMethod("GetTroopRoster", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-				IEnumerable entries = getRoster == null ? null : getRoster.Invoke(roster, null) as IEnumerable;
-				if (entries == null)
-					return false;
-				foreach (object entry in entries)
-				{
-					object ch = GetProperty(entry, "Character");
-					if (ch != null && string.Equals(GetStringId(ch), characterId, StringComparison.Ordinal))
-						return true;
-				}
+				object innerSkills = GetProperty(defaultSkills, "Skills");
+				if (innerSkills == null)
+					r.Flags.Add("DEFAULT_SKILLS_INNER_NULL");
 			}
-			catch { }
-			return false;
+
+			FieldInfo originField = FindField(c.GetType(), "_originCharacter");
+			object origin = SafeFieldGet(originField, c);
+			r.OriginId = origin == null ? "null" : GetStringId(origin);
+
+			if (r.IsHero)
+			{
+				object heroCharacter = GetProperty(hero, "CharacterObject");
+				if (heroCharacter == null)
+					r.Flags.Add("HERO_CHARACTEROBJECT_NULL");
+				else if (!object.ReferenceEquals(heroCharacter, c))
+					r.Flags.Add("HERO_CHARACTEROBJECT_MISMATCH");
+
+				FieldInfo heroSkillsField = FindField(hero.GetType(), "_heroSkills");
+				object heroSkills = SafeFieldGet(heroSkillsField, hero);
+				r.HeroSkillsState = heroSkillsField == null ? "FIELD_NOT_FOUND" : (heroSkills == null ? "NULL" : "OK");
+
+				// A null Hero._heroSkills is tolerated by vanilla Hero.GetSkillValue(), so log it
+				// diagnostically but do not classify it as a fatal CharacterObject error by itself.
+				if (originField != null && origin == null)
+					r.Flags.Add("HERO_ORIGIN_NULL");
+			}
+			else
+			{
+				r.HeroSkillsState = "n/a";
+			}
+
+			return r;
 		}
 
-		private static IEnumerable GetAllParties()
+		private static IEnumerable<object> EnumerateRosterCharacters(object roster)
 		{
-			Type mobilePartyType = FindType("TaleWorlds.CampaignSystem.Party.MobileParty");
-			if (mobilePartyType != null)
+			MethodInfo m = roster.GetType().GetMethod("GetTroopRoster", InstanceFlags);
+			IEnumerable entries = null;
+			try { entries = m == null ? null : m.Invoke(roster, null) as IEnumerable; } catch { }
+			if (entries == null) yield break;
+
+			foreach (object entry in entries)
 			{
-				object all = GetStaticMember(mobilePartyType, "All");
-				if (all is IEnumerable)
-					return (IEnumerable)all;
+				if (entry == null) continue;
+				object character = GetProperty(entry, "Character");
+				if (character != null) yield return character;
 			}
-			object campaign = GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current");
-			return campaign == null ? null : GetProperty(campaign, "MobileParties") as IEnumerable;
 		}
 
 		private static IEnumerable<object> GetAllCharacters()
 		{
 			Type characterType = FindType("TaleWorlds.CampaignSystem.CharacterObject");
-			if (characterType != null)
+			object all = GetStaticMember(characterType, "All");
+			if (all is IEnumerable)
 			{
-				object all = GetStaticMember(characterType, "All");
-				if (all is IEnumerable)
-				{
-					foreach (object c in (IEnumerable)all)
-						yield return c;
-					yield break;
-				}
+				foreach (object c in (IEnumerable)all) yield return c;
+				yield break;
 			}
+
 			object campaign = GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current");
 			IEnumerable chars = campaign == null ? null : GetProperty(campaign, "Characters") as IEnumerable;
 			if (chars != null)
-				foreach (object c in chars)
-					yield return c;
+				foreach (object c in chars) yield return c;
 		}
 
-		private static object FindCharacter(string id)
+		private static IEnumerable GetAllParties()
 		{
-			return GetAllCharacters().FirstOrDefault(c => string.Equals(GetStringId(c), id, StringComparison.Ordinal));
+			Type mobilePartyType = FindType("TaleWorlds.CampaignSystem.Party.MobileParty");
+			object all = GetStaticMember(mobilePartyType, "All");
+			if (all is IEnumerable) return (IEnumerable)all;
+
+			object campaign = GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current");
+			return campaign == null ? null : GetProperty(campaign, "MobileParties") as IEnumerable;
 		}
 
-		private static FieldInfo FindDefaultSkillsField(Type type)
+		private static bool CampaignReady()
+		{
+			return GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current") != null;
+		}
+
+		private static FieldInfo FindField(Type type, string name)
 		{
 			for (Type t = type; t != null; t = t.BaseType)
 			{
-				FieldInfo f = t.GetField("DefaultCharacterSkills", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-				if (f != null)
-					return f;
+				FieldInfo f = t.GetField(name, InstanceFlags);
+				if (f != null) return f;
 			}
 			return null;
 		}
 
-		private static bool IsHero(object c)
+		private static object SafeFieldGet(FieldInfo field, object obj)
 		{
-			object v = GetProperty(c, "IsHero");
-			return v is bool && (bool)v;
-		}
-
-		private static string GetStringId(object obj)
-		{
-			object id = GetProperty(obj, "StringId");
-			return id == null ? "<null-id>" : id.ToString();
+			if (field == null || obj == null) return null;
+			try { return field.GetValue(obj); } catch { return null; }
 		}
 
 		private static object GetProperty(object obj, string name)
 		{
-			if (obj == null)
-				return null;
-			PropertyInfo p = obj.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
-			if (p == null)
-				return null;
+			if (obj == null) return null;
+			PropertyInfo p = obj.GetType().GetProperty(name, InstanceFlags | BindingFlags.Static);
+			if (p == null) return null;
 			try { return p.GetValue(obj, null); } catch { return null; }
 		}
 
 		private static object GetStaticMember(Type type, string name)
 		{
-			if (type == null)
-				return null;
-			PropertyInfo p = type.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-			if (p != null)
-			{
-				try { return p.GetValue(null, null); } catch { }
-			}
-			FieldInfo f = type.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
-			if (f != null)
-			{
-				try { return f.GetValue(null); } catch { }
-			}
+			if (type == null) return null;
+			PropertyInfo p = type.GetProperty(name, StaticFlags);
+			if (p != null) try { return p.GetValue(null, null); } catch { }
+			FieldInfo f = type.GetField(name, StaticFlags);
+			if (f != null) try { return f.GetValue(null); } catch { }
 			return null;
 		}
 
@@ -359,46 +304,27 @@ namespace AelfeyjaRescue
 				try
 				{
 					Type t = a.GetType(fullName, false);
-					if (t != null)
-						return t;
+					if (t != null) return t;
 				}
 				catch { }
 			}
 			return null;
 		}
 
-		private static string SafeName(object obj)
+		private static string GetStringId(object obj)
 		{
-			if (obj == null)
-				return "null";
-			try
-			{
-				object name = GetProperty(obj, "Name");
-				return name == null ? GetStringId(obj) : name.ToString();
-			}
-			catch { return obj.GetType().Name; }
-		}
-
-		private static string SafeValue(object obj)
-		{
-			return obj == null ? "null" : obj.ToString();
+			if (obj == null) return "<null>";
+			object id = GetProperty(obj, "StringId");
+			return id == null ? "<null-id>" : id.ToString();
 		}
 
 		private static string Flatten(Exception ex)
 		{
-			while (ex is TargetInvocationException && ex.InnerException != null)
-				ex = ex.InnerException;
+			if (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
 			return ex.GetType().Name + ": " + ex.Message;
 		}
 
-		private static string Finish(string message)
-		{
-			_lastResult = message;
-			LogPublic(message);
-			return message;
-		}
-
-		public static void LogPublic(string message)
+		public static void Log(string message)
 		{
 			try
 			{
@@ -406,9 +332,29 @@ namespace AelfeyjaRescue
 				string root = Directory.GetParent(baseDir)?.Parent?.FullName ?? baseDir;
 				string moduleDir = Path.Combine(root, "Modules", "AelfeyjaRescue");
 				Directory.CreateDirectory(moduleDir);
-				File.AppendAllText(Path.Combine(moduleDir, "rescue.log"), "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] " + message + Environment.NewLine);
+				File.AppendAllText(Path.Combine(moduleDir, "character_scan.log"), "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] " + message + Environment.NewLine);
 			}
 			catch { }
+		}
+
+		private sealed class ScanResult
+		{
+			public string Id;
+			public bool IsHero;
+			public string DefaultSkillsState;
+			public string HeroSkillsState;
+			public string OriginId;
+			public readonly List<string> Flags = new List<string>();
+
+			public string ToLogLine()
+			{
+				return "CHAR id=" + Id +
+					" isHero=" + IsHero +
+					" defaultSkills=" + DefaultSkillsState +
+					" heroSkills=" + HeroSkillsState +
+					" origin=" + OriginId +
+					" flags=" + (Flags.Count == 0 ? "OK" : string.Join("+", Flags.ToArray()));
+			}
 		}
 	}
 }
