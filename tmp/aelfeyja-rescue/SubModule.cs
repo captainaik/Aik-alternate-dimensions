@@ -14,30 +14,22 @@ namespace AelfeyjaRescue
 		protected override void OnSubModuleLoad()
 		{
 			base.OnSubModuleLoad();
-			CharacterScanner.Log("Character Crash Scanner v1.3 loaded. Read-only scanner; no repairs or deletions.");
+			CharacterScanner.Log("Character Crash Scanner v1.4 loaded. Repair is manual only.");
 		}
 	}
 
 	public static class RescueCommands
 	{
 		[CommandLineFunctionality.CommandLineArgumentFunction("scan_chars", "rescue")]
-		public static string ScanChars(List<string> args)
-		{
-			return CharacterScanner.ScanAllCharacters();
-		}
+		public static string ScanChars(List<string> args) => CharacterScanner.ScanAllCharacters();
 
 		[CommandLineFunctionality.CommandLineArgumentFunction("scan_parties", "rescue")]
-		public static string ScanParties(List<string> args)
-		{
-			return CharacterScanner.ScanAllPartyRosters();
-		}
+		public static string ScanParties(List<string> args) => CharacterScanner.ScanAllPartyRosters();
 
 		[CommandLineFunctionality.CommandLineArgumentFunction("scan_all", "rescue")]
 		public static string ScanAll(List<string> args)
 		{
-			string a = CharacterScanner.ScanAllCharacters();
-			string b = CharacterScanner.ScanAllPartyRosters();
-			return a + " | " + b;
+			return CharacterScanner.ScanAllCharacters() + " | " + CharacterScanner.ScanAllPartyRosters();
 		}
 
 		[CommandLineFunctionality.CommandLineArgumentFunction("scan_char", "rescue")]
@@ -47,6 +39,12 @@ namespace AelfeyjaRescue
 				return "Usage: rescue.scan_char <CharacterObject StringId>";
 			return CharacterScanner.ScanOne(args[0]);
 		}
+
+		[CommandLineFunctionality.CommandLineArgumentFunction("repair_rosters", "rescue")]
+		public static string RepairRosters(List<string> args) => CharacterScanner.RepairRosterCharacterReferences();
+
+		[CommandLineFunctionality.CommandLineArgumentFunction("log_path", "rescue")]
+		public static string LogPath(List<string> args) => CharacterScanner.GetLogPathPublic();
 	}
 
 	internal static class CharacterScanner
@@ -58,39 +56,29 @@ namespace AelfeyjaRescue
 		{
 			try
 			{
-				if (!CampaignReady())
-					return "CAMPAIGN_NOT_READY";
-
+				if (!CampaignReady()) return "CAMPAIGN_NOT_READY";
 				List<object> characters = GetAllCharacters().Where(x => x != null).ToList();
 				List<ScanResult> bad = new List<ScanResult>();
-				int heroCount = 0;
-				int regularCount = 0;
-				int scannerWarnings = 0;
-
-				Log("===== CHARACTER SCAN v1.3 START =====");
-				Log("Characters enumerated: " + characters.Count);
-
+				int heroes = 0, regulars = 0, warnings = 0;
+				Log("===== CHARACTER SCAN v1.4 START =====");
 				foreach (object c in characters)
 				{
 					ScanResult r = InspectCharacter(c);
-					if (r.IsHero) heroCount++; else regularCount++;
-					if (r.ScannerWarning) scannerWarnings++;
+					if (r.IsHero) heroes++; else regulars++;
+					if (r.ScannerWarning) warnings++;
 					if (r.Flags.Count > 0)
 					{
 						bad.Add(r);
 						Log("BAD_CHARACTER " + r.ToLogLine());
 					}
 				}
-
-				Log("Summary: heroes=" + heroCount + ", regular=" + regularCount + ", bad=" + bad.Count + ", scannerWarnings=" + scannerWarnings);
-				Log("===== CHARACTER SCAN v1.3 END =====");
-
-				string top = bad.Count == 0 ? "none" : string.Join(", ", bad.Take(25).Select(x => x.Id + "[" + string.Join("+", x.Flags.ToArray()) + "]").ToArray());
-				return "CHAR_SCAN_V13 total=" + characters.Count + ", heroes=" + heroCount + ", regular=" + regularCount + ", bad=" + bad.Count + ", warnings=" + scannerWarnings + ". " + top;
+				Log("Summary: total=" + characters.Count + ", heroes=" + heroes + ", regular=" + regulars + ", bad=" + bad.Count + ", warnings=" + warnings);
+				Log("===== CHARACTER SCAN v1.4 END =====");
+				string sample = bad.Count == 0 ? "none" : string.Join(", ", bad.Take(20).Select(x => x.Id + "[" + string.Join("+", x.Flags.ToArray()) + "]").ToArray());
+				return "CHAR_SCAN_V14 total=" + characters.Count + ", heroes=" + heroes + ", regular=" + regulars + ", bad=" + bad.Count + ", warnings=" + warnings + ". " + sample;
 			}
 			catch (Exception ex)
 			{
-				Log("CHAR_SCAN ERROR: " + Flatten(ex));
 				return "CHAR_SCAN ERROR: " + Flatten(ex);
 			}
 		}
@@ -99,76 +87,58 @@ namespace AelfeyjaRescue
 		{
 			try
 			{
-				if (!CampaignReady())
-					return "CAMPAIGN_NOT_READY";
-
+				if (!CampaignReady()) return "CAMPAIGN_NOT_READY";
 				IEnumerable parties = GetAllParties();
-				if (parties == null)
-					return "PARTY_ENUMERATION_FAILED";
+				if (parties == null) return "PARTY_ENUMERATION_FAILED";
 
-				int partyCount = 0;
-				int rosterCount = 0;
-				int rosterFailures = 0;
-				int rosterEntries = 0;
-				List<string> badHits = new List<string>();
+				int partyCount = 0, rosterCount = 0, failures = 0, entries = 0;
+				List<string> hits = new List<string>();
 				HashSet<string> uniqueBad = new HashSet<string>(StringComparer.Ordinal);
+				Log("===== PARTY ROSTER SCAN v1.4 START =====");
 
-				Log("===== PARTY ROSTER SCAN v1.3 START =====");
 				foreach (object party in parties)
 				{
 					if (party == null) continue;
 					partyCount++;
 					string partyId = GetStringId(party);
-
 					foreach (string rosterName in new[] { "MemberRoster", "PrisonRoster" })
 					{
 						object roster = GetRosterFromParty(party, rosterName);
-						if (roster == null)
-						{
-							rosterFailures++;
-							Log("ROSTER_MISSING party=" + partyId + " roster=" + rosterName);
-							continue;
-						}
-
+						if (roster == null) { failures++; continue; }
 						rosterCount++;
-						List<object> entries;
-						string enumError;
-						if (!TryEnumerateRosterEntries(roster, out entries, out enumError))
+						Array data;
+						int count;
+						string error;
+						if (!TryGetRosterData(roster, out data, out count, out error))
 						{
-							rosterFailures++;
-							Log("ROSTER_ENUM_FAILED party=" + partyId + " roster=" + rosterName + " error=" + enumError);
+							failures++;
+							Log("ROSTER_ENUM_FAILED party=" + partyId + " roster=" + rosterName + " error=" + error);
 							continue;
 						}
 
-						foreach (object entry in entries)
+						for (int i = 0; i < count; i++)
 						{
+							object entry = data.GetValue(i);
 							object character = GetMember(entry, "Character");
-							if (character == null)
-							{
-								Log("ROSTER_ENTRY_CHARACTER_NULL party=" + partyId + " roster=" + rosterName);
-								continue;
-							}
-
-							rosterEntries++;
+							if (character == null) continue;
+							entries++;
 							ScanResult r = InspectCharacter(character);
-							if (r.Flags.Count == 0) continue;
+							if (!HasFatalRegularSkillFlag(r)) continue;
 							uniqueBad.Add(r.Id);
 							string hit = "party=" + partyId + " roster=" + rosterName + " char=" + r.Id + " flags=" + string.Join("+", r.Flags.ToArray());
-							badHits.Add(hit);
+							hits.Add(hit);
 							Log("BAD_ROSTER_ENTRY " + hit);
 						}
 					}
 				}
 
-				Log("Summary: parties=" + partyCount + ", rosters=" + rosterCount + ", rosterFailures=" + rosterFailures + ", rosterEntries=" + rosterEntries + ", badHits=" + badHits.Count + ", uniqueBad=" + uniqueBad.Count);
-				Log("===== PARTY ROSTER SCAN v1.3 END =====");
-
-				string sample = badHits.Count == 0 ? "none" : string.Join(" | ", badHits.Take(15).ToArray());
-				return "PARTY_SCAN_V13 parties=" + partyCount + ", rosters=" + rosterCount + ", failures=" + rosterFailures + ", entries=" + rosterEntries + ", badHits=" + badHits.Count + ", uniqueBad=" + uniqueBad.Count + ". " + sample;
+				Log("Summary: parties=" + partyCount + ", rosters=" + rosterCount + ", failures=" + failures + ", entries=" + entries + ", badHits=" + hits.Count + ", uniqueBad=" + uniqueBad.Count);
+				Log("===== PARTY ROSTER SCAN v1.4 END =====");
+				string sample = hits.Count == 0 ? "none" : string.Join(" | ", hits.Take(12).ToArray());
+				return "PARTY_SCAN_V14 parties=" + partyCount + ", rosters=" + rosterCount + ", failures=" + failures + ", entries=" + entries + ", badHits=" + hits.Count + ", uniqueBad=" + uniqueBad.Count + ". " + sample;
 			}
 			catch (Exception ex)
 			{
-				Log("PARTY_SCAN ERROR: " + Flatten(ex));
 				return "PARTY_SCAN ERROR: " + Flatten(ex);
 			}
 		}
@@ -178,8 +148,7 @@ namespace AelfeyjaRescue
 			try
 			{
 				object c = GetAllCharacters().FirstOrDefault(x => string.Equals(GetStringId(x), id, StringComparison.Ordinal));
-				if (c == null)
-					return "NOT_FOUND: " + id;
+				if (c == null) return "NOT_FOUND: " + id;
 				ScanResult r = InspectCharacter(c);
 				Log("MANUAL_SCAN " + r.ToLogLine());
 				return r.ToLogLine();
@@ -190,11 +159,176 @@ namespace AelfeyjaRescue
 			}
 		}
 
+		public static string RepairRosterCharacterReferences()
+		{
+			try
+			{
+				if (!CampaignReady()) return "CAMPAIGN_NOT_READY";
+
+				// Canonical CharacterObject.All entries are the safe donors. We only use regular
+				// characters whose own DefaultCharacterSkills chain is healthy.
+				Dictionary<string, object> canonical = new Dictionary<string, object>(StringComparer.Ordinal);
+				foreach (object c in GetAllCharacters())
+				{
+					if (c == null) continue;
+					ScanResult r = InspectCharacter(c);
+					if (r.IsHero || HasFatalRegularSkillFlag(r)) continue;
+					string id = GetStringId(c);
+					if (!canonical.ContainsKey(id)) canonical[id] = c;
+				}
+
+				IEnumerable parties = GetAllParties();
+				if (parties == null) return "PARTY_ENUMERATION_FAILED";
+
+				int badSeen = 0, replaced = 0, merged = 0, unresolved = 0, rostersChanged = 0;
+				HashSet<string> repairedIds = new HashSet<string>(StringComparer.Ordinal);
+				List<string> unresolvedIds = new List<string>();
+				Log("===== ROSTER REPAIR v1.4 START =====");
+
+				foreach (object party in parties)
+				{
+					if (party == null) continue;
+					string partyId = GetStringId(party);
+					foreach (string rosterName in new[] { "MemberRoster", "PrisonRoster" })
+					{
+						object roster = GetRosterFromParty(party, rosterName);
+						if (roster == null) continue;
+						Array data;
+						int count;
+						string error;
+						if (!TryGetRosterData(roster, out data, out count, out error)) continue;
+						bool changed = false;
+						int i = 0;
+						while (i < count)
+						{
+							object entry = data.GetValue(i);
+							object badCharacter = GetMember(entry, "Character");
+							if (badCharacter == null) { i++; continue; }
+							ScanResult badResult = InspectCharacter(badCharacter);
+							if (!HasFatalRegularSkillFlag(badResult)) { i++; continue; }
+							badSeen++;
+							object donor;
+							if (!canonical.TryGetValue(badResult.Id, out donor) || donor == null || object.ReferenceEquals(donor, badCharacter))
+							{
+								unresolved++;
+								unresolvedIds.Add(badResult.Id);
+								Log("UNRESOLVED party=" + partyId + " roster=" + rosterName + " char=" + badResult.Id);
+								i++;
+								continue;
+							}
+
+							// If the canonical troop is already present in this roster, merge the bad stack
+							// into it before removing the malformed duplicate. Otherwise simply replace the
+							// Character reference; counts/wounded/XP remain untouched.
+							int existing = FindCharacterReferenceIndex(data, count, donor, i);
+							if (existing >= 0)
+							{
+								if (!MergeEntryIntoCanonicalAndRemove(roster, data, existing, i))
+								{
+									unresolved++;
+									unresolvedIds.Add(badResult.Id);
+									i++;
+									continue;
+								}
+								merged++;
+								count--;
+								changed = true;
+								repairedIds.Add(badResult.Id);
+								Log("MERGED_BAD_STACK party=" + partyId + " roster=" + rosterName + " char=" + badResult.Id);
+								continue; // element at i was removed; inspect the shifted element now at i
+							}
+
+							FieldInfo characterField = FindField(entry.GetType(), "Character");
+							if (characterField == null)
+							{
+								unresolved++;
+								unresolvedIds.Add(badResult.Id);
+								i++;
+								continue;
+							}
+							characterField.SetValue(entry, donor);
+							data.SetValue(entry, i);
+							replaced++;
+							changed = true;
+							repairedIds.Add(badResult.Id);
+							Log("REPLACED_BAD_REFERENCE party=" + partyId + " roster=" + rosterName + " char=" + badResult.Id);
+							i++;
+						}
+
+						if (changed)
+						{
+							rostersChanged++;
+							InvokeNoArg(roster, "UpdateVersion");
+						}
+					}
+				}
+
+				string verify = ScanAllPartyRosters();
+				string result = "REPAIR_V14 badSeen=" + badSeen + ", replaced=" + replaced + ", merged=" + merged + ", rostersChanged=" + rostersChanged + ", uniqueIds=" + repairedIds.Count + ", unresolved=" + unresolved + ". IDs=" + (repairedIds.Count == 0 ? "none" : string.Join(",", repairedIds.Take(30).ToArray())) + ". VERIFY: " + verify;
+				Log(result);
+				Log("===== ROSTER REPAIR v1.4 END =====");
+				return result;
+			}
+			catch (Exception ex)
+			{
+				string result = "REPAIR ERROR: " + Flatten(ex);
+				Log(result);
+				return result;
+			}
+		}
+
+		private static bool MergeEntryIntoCanonicalAndRemove(object roster, Array data, int canonicalIndex, int badIndex)
+		{
+			try
+			{
+				object goodEntry = data.GetValue(canonicalIndex);
+				object badEntry = data.GetValue(badIndex);
+				FieldInfo numberField = FindField(goodEntry.GetType(), "_number");
+				FieldInfo woundedField = FindField(goodEntry.GetType(), "_woundedNumber");
+				FieldInfo xpField = FindField(goodEntry.GetType(), "_xp");
+				if (numberField == null || woundedField == null || xpField == null) return false;
+
+				int goodN = SafeInt(numberField.GetValue(goodEntry));
+				int goodW = SafeInt(woundedField.GetValue(goodEntry));
+				int goodXp = SafeInt(xpField.GetValue(goodEntry));
+				int badN = SafeInt(numberField.GetValue(badEntry));
+				int badW = SafeInt(woundedField.GetValue(badEntry));
+				int badXp = SafeInt(xpField.GetValue(badEntry));
+				numberField.SetValue(goodEntry, goodN + badN);
+				woundedField.SetValue(goodEntry, goodW + badW);
+				xpField.SetValue(goodEntry, goodXp + badXp);
+				data.SetValue(goodEntry, canonicalIndex);
+
+				MethodInfo remove = roster.GetType().GetMethod("RemoveRange", InstanceFlags, null, new[] { typeof(int), typeof(int) }, null);
+				if (remove == null) return false;
+				remove.Invoke(roster, new object[] { badIndex, badIndex + 1 });
+				return true;
+			}
+			catch { return false; }
+		}
+
+		private static int FindCharacterReferenceIndex(Array data, int count, object target, int skip)
+		{
+			for (int i = 0; i < count; i++)
+			{
+				if (i == skip) continue;
+				object entry = data.GetValue(i);
+				object c = GetMember(entry, "Character");
+				if (object.ReferenceEquals(c, target)) return i;
+			}
+			return -1;
+		}
+
+		private static bool HasFatalRegularSkillFlag(ScanResult r)
+		{
+			if (r == null || r.IsHero) return false;
+			return r.Flags.Contains("REGULAR_DEFAULT_SKILLS_NULL") || r.Flags.Contains("REGULAR_DEFAULT_SKILLS_INNER_NULL");
+		}
+
 		private static ScanResult InspectCharacter(object c)
 		{
 			ScanResult r = new ScanResult();
 			r.Id = GetStringId(c);
-
 			FieldInfo heroField = FindField(c.GetType(), "_heroObject");
 			object hero = SafeFieldGet(heroField, c);
 			object isHeroProperty = GetProperty(c, "IsHero");
@@ -206,19 +340,14 @@ namespace AelfeyjaRescue
 
 			if (r.IsHero)
 			{
-				// Null origin is NORMAL for original heroes and is not an error.
 				if (hero == null)
 				{
 					r.Flags.Add("ISHERO_TRUE_BUT_HEROOBJECT_NULL");
 					return r;
 				}
-
 				object heroCharacter = GetProperty(hero, "CharacterObject");
-				if (heroCharacter == null)
-					r.Flags.Add("HERO_CHARACTEROBJECT_NULL");
-				else if (!object.ReferenceEquals(heroCharacter, c))
-					r.Flags.Add("HERO_CHARACTEROBJECT_MISMATCH");
-
+				if (heroCharacter == null) r.Flags.Add("HERO_CHARACTEROBJECT_NULL");
+				else if (!object.ReferenceEquals(heroCharacter, c)) r.Flags.Add("HERO_CHARACTEROBJECT_MISMATCH");
 				FieldInfo heroSkillsField = FindField(hero.GetType(), "_heroSkills");
 				object heroSkills = SafeFieldGet(heroSkillsField, hero);
 				r.HeroSkillsState = heroSkillsField == null ? "FIELD_NOT_FOUND" : (heroSkills == null ? "NULL_TOLERATED_BY_VANILLA" : "OK");
@@ -226,8 +355,6 @@ namespace AelfeyjaRescue
 				return r;
 			}
 
-			// This is the path implicated by the crash dump: regular CharacterObject.GetSkillValue
-			// dereferences DefaultCharacterSkills.Skills without the hero safety path.
 			FieldInfo defaultSkillsField = FindField(c.GetType(), "DefaultCharacterSkills");
 			if (defaultSkillsField == null)
 			{
@@ -235,7 +362,6 @@ namespace AelfeyjaRescue
 				r.DefaultSkillsState = "FIELD_NOT_FOUND";
 				return r;
 			}
-
 			object defaultSkills = SafeFieldGet(defaultSkillsField, c);
 			if (defaultSkills == null)
 			{
@@ -243,17 +369,13 @@ namespace AelfeyjaRescue
 				r.Flags.Add("REGULAR_DEFAULT_SKILLS_NULL");
 				return r;
 			}
-
 			object innerSkills = GetMember(defaultSkills, "Skills");
 			if (innerSkills == null)
 			{
 				r.DefaultSkillsState = "INNER_SKILLS_NULL";
 				r.Flags.Add("REGULAR_DEFAULT_SKILLS_INNER_NULL");
 			}
-			else
-			{
-				r.DefaultSkillsState = "OK";
-			}
+			else r.DefaultSkillsState = "OK";
 			r.HeroSkillsState = "n/a";
 			return r;
 		}
@@ -262,57 +384,23 @@ namespace AelfeyjaRescue
 		{
 			object roster = GetProperty(party, rosterName);
 			if (roster != null) return roster;
-
 			object partyBase = GetProperty(party, "Party");
-			if (partyBase != null)
-			{
-				roster = GetProperty(partyBase, rosterName);
-				if (roster != null) return roster;
-			}
-			return null;
+			return partyBase == null ? null : GetProperty(partyBase, rosterName);
 		}
 
-		private static bool TryEnumerateRosterEntries(object roster, out List<object> entries, out string error)
+		private static bool TryGetRosterData(object roster, out Array data, out int count, out string error)
 		{
-			entries = new List<object>();
+			data = null;
+			count = -1;
 			error = null;
 			try
 			{
-				int count = GetIntMember(roster, "Count", "_count");
-				if (count < 0)
-				{
-					error = "COUNT_NOT_FOUND";
-					return false;
-				}
-
-				MethodInfo getter = roster.GetType().GetMethods(InstanceFlags)
-					.FirstOrDefault(m => m.Name == "GetElementCopyAtIndex" && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(int));
-
-				if (getter != null)
-				{
-					for (int i = 0; i < count; i++)
-					{
-						object entry = getter.Invoke(roster, new object[] { i });
-						if (entry != null) entries.Add(entry);
-					}
-					return true;
-				}
-
+				count = GetIntMember(roster, "Count", "_count");
+				if (count < 0) { error = "COUNT_NOT_FOUND"; return false; }
 				FieldInfo dataField = FindField(roster.GetType(), "data") ?? FindField(roster.GetType(), "_data");
-				object data = SafeFieldGet(dataField, roster);
-				Array array = data as Array;
-				if (array == null)
-				{
-					error = "NO_GETELEMENT_AND_NO_DATA_ARRAY";
-					return false;
-				}
-
-				int limit = Math.Min(count, array.Length);
-				for (int i = 0; i < limit; i++)
-				{
-					object entry = array.GetValue(i);
-					if (entry != null) entries.Add(entry);
-				}
+				data = SafeFieldGet(dataField, roster) as Array;
+				if (data == null) { error = "DATA_ARRAY_NOT_FOUND"; return false; }
+				if (count > data.Length) { error = "COUNT_GT_ARRAY_LENGTH"; return false; }
 				return true;
 			}
 			catch (Exception ex)
@@ -331,22 +419,31 @@ namespace AelfeyjaRescue
 			return v is int ? (int)v : -1;
 		}
 
+		private static int SafeInt(object v) => v is int ? (int)v : 0;
+
+		private static void InvokeNoArg(object obj, string methodName)
+		{
+			if (obj == null) return;
+			try
+			{
+				MethodInfo m = obj.GetType().GetMethod(methodName, InstanceFlags, null, Type.EmptyTypes, null);
+				if (m != null) m.Invoke(obj, null);
+			}
+			catch { }
+		}
+
 		private static IEnumerable<object> GetAllCharacters()
 		{
 			Type characterType = FindType("TaleWorlds.CampaignSystem.CharacterObject");
 			object all = GetStaticMember(characterType, "All");
 			if (all is IEnumerable)
 			{
-				foreach (object c in (IEnumerable)all)
-					yield return c;
+				foreach (object c in (IEnumerable)all) yield return c;
 				yield break;
 			}
-
 			object campaign = GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current");
 			IEnumerable chars = campaign == null ? null : GetProperty(campaign, "Characters") as IEnumerable;
-			if (chars != null)
-				foreach (object c in chars)
-					yield return c;
+			if (chars != null) foreach (object c in chars) yield return c;
 		}
 
 		private static IEnumerable GetAllParties()
@@ -354,16 +451,13 @@ namespace AelfeyjaRescue
 			Type mobilePartyType = FindType("TaleWorlds.CampaignSystem.Party.MobileParty");
 			object all = GetStaticMember(mobilePartyType, "All");
 			if (all is IEnumerable) return (IEnumerable)all;
-
 			object campaign = GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current");
-			if (campaign == null) return null;
-			return GetProperty(campaign, "MobileParties") as IEnumerable;
+			return campaign == null ? null : GetProperty(campaign, "MobileParties") as IEnumerable;
 		}
 
 		private static bool CampaignReady()
 		{
-			Type campaignType = FindType("TaleWorlds.CampaignSystem.Campaign");
-			return GetStaticMember(campaignType, "Current") != null;
+			return GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current") != null;
 		}
 
 		private static string GetStringId(object obj)
@@ -376,10 +470,9 @@ namespace AelfeyjaRescue
 		private static object GetMember(object obj, string name)
 		{
 			if (obj == null) return null;
-			object value = GetProperty(obj, name);
-			if (value != null) return value;
-			FieldInfo f = FindField(obj.GetType(), name);
-			return SafeFieldGet(f, obj);
+			object p = GetProperty(obj, name);
+			if (p != null) return p;
+			return SafeFieldGet(FindField(obj.GetType(), name), obj);
 		}
 
 		private static object GetProperty(object obj, string name)
@@ -443,20 +536,25 @@ namespace AelfeyjaRescue
 
 		private static string Flatten(Exception ex)
 		{
-			while (ex is TargetInvocationException && ex.InnerException != null)
-				ex = ex.InnerException;
+			while (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
 			return ex.GetType().Name + ": " + ex.Message;
+		}
+
+		public static string GetLogPathPublic() => GetLogPath();
+
+		private static string GetLogPath()
+		{
+			string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+			return Path.Combine(docs, "Mount and Blade II Bannerlord", "CharacterCrashScanner.log");
 		}
 
 		public static void Log(string message)
 		{
 			try
 			{
-				string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-				string root = Directory.GetParent(baseDir)?.Parent?.FullName ?? baseDir;
-				string moduleDir = Path.Combine(root, "Modules", "AelfeyjaRescue");
-				Directory.CreateDirectory(moduleDir);
-				File.AppendAllText(Path.Combine(moduleDir, "character_scan.log"), "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] " + message + Environment.NewLine);
+				string path = GetLogPath();
+				Directory.CreateDirectory(Path.GetDirectoryName(path));
+				File.AppendAllText(path, "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] " + message + Environment.NewLine);
 			}
 			catch { }
 		}
@@ -473,12 +571,7 @@ namespace AelfeyjaRescue
 
 			public string ToLogLine()
 			{
-				return "id=" + Id +
-					" isHero=" + IsHero +
-					" defaultSkills=" + DefaultSkillsState +
-					" heroSkills=" + HeroSkillsState +
-					" origin=" + OriginId +
-					" flags=" + (Flags.Count == 0 ? "none" : string.Join("+", Flags.ToArray()));
+				return "id=" + Id + " isHero=" + IsHero + " defaultSkills=" + DefaultSkillsState + " heroSkills=" + HeroSkillsState + " origin=" + OriginId + " flags=" + (Flags.Count == 0 ? "none" : string.Join("+", Flags.ToArray()));
 			}
 		}
 	}
