@@ -14,7 +14,7 @@ namespace AelfeyjaRescue
 		protected override void OnSubModuleLoad()
 		{
 			base.OnSubModuleLoad();
-			CharacterScanner.Log("Character Crash Scanner v1.2 loaded. No automatic repairs are performed.");
+			CharacterScanner.Log("Character Crash Scanner v1.3 loaded. Read-only scanner; no repairs or deletions.");
 		}
 	}
 
@@ -65,26 +65,28 @@ namespace AelfeyjaRescue
 				List<ScanResult> bad = new List<ScanResult>();
 				int heroCount = 0;
 				int regularCount = 0;
+				int scannerWarnings = 0;
 
-				Log("===== CHARACTER SCAN START =====");
+				Log("===== CHARACTER SCAN v1.3 START =====");
 				Log("Characters enumerated: " + characters.Count);
 
 				foreach (object c in characters)
 				{
 					ScanResult r = InspectCharacter(c);
 					if (r.IsHero) heroCount++; else regularCount++;
+					if (r.ScannerWarning) scannerWarnings++;
 					if (r.Flags.Count > 0)
 					{
 						bad.Add(r);
-						Log(r.ToLogLine());
+						Log("BAD_CHARACTER " + r.ToLogLine());
 					}
 				}
 
-				Log("Summary: heroes=" + heroCount + ", regular=" + regularCount + ", flagged=" + bad.Count);
-				Log("===== CHARACTER SCAN END =====");
+				Log("Summary: heroes=" + heroCount + ", regular=" + regularCount + ", bad=" + bad.Count + ", scannerWarnings=" + scannerWarnings);
+				Log("===== CHARACTER SCAN v1.3 END =====");
 
-				string top = bad.Count == 0 ? "none" : string.Join(", ", bad.Take(20).Select(x => x.Id + "[" + string.Join("+", x.Flags.ToArray()) + "]").ToArray());
-				return "CHAR_SCAN total=" + characters.Count + ", heroes=" + heroCount + ", regular=" + regularCount + ", flagged=" + bad.Count + ". " + top;
+				string top = bad.Count == 0 ? "none" : string.Join(", ", bad.Take(25).Select(x => x.Id + "[" + string.Join("+", x.Flags.ToArray()) + "]").ToArray());
+				return "CHAR_SCAN_V13 total=" + characters.Count + ", heroes=" + heroCount + ", regular=" + regularCount + ", bad=" + bad.Count + ", warnings=" + scannerWarnings + ". " + top;
 			}
 			catch (Exception ex)
 			{
@@ -105,11 +107,13 @@ namespace AelfeyjaRescue
 					return "PARTY_ENUMERATION_FAILED";
 
 				int partyCount = 0;
+				int rosterCount = 0;
+				int rosterFailures = 0;
 				int rosterEntries = 0;
 				List<string> badHits = new List<string>();
 				HashSet<string> uniqueBad = new HashSet<string>(StringComparer.Ordinal);
 
-				Log("===== PARTY ROSTER SCAN START =====");
+				Log("===== PARTY ROSTER SCAN v1.3 START =====");
 				foreach (object party in parties)
 				{
 					if (party == null) continue;
@@ -118,11 +122,33 @@ namespace AelfeyjaRescue
 
 					foreach (string rosterName in new[] { "MemberRoster", "PrisonRoster" })
 					{
-						object roster = GetProperty(party, rosterName);
-						if (roster == null) continue;
-						foreach (object character in EnumerateRosterCharacters(roster))
+						object roster = GetRosterFromParty(party, rosterName);
+						if (roster == null)
 						{
-							if (character == null) continue;
+							rosterFailures++;
+							Log("ROSTER_MISSING party=" + partyId + " roster=" + rosterName);
+							continue;
+						}
+
+						rosterCount++;
+						List<object> entries;
+						string enumError;
+						if (!TryEnumerateRosterEntries(roster, out entries, out enumError))
+						{
+							rosterFailures++;
+							Log("ROSTER_ENUM_FAILED party=" + partyId + " roster=" + rosterName + " error=" + enumError);
+							continue;
+						}
+
+						foreach (object entry in entries)
+						{
+							object character = GetMember(entry, "Character");
+							if (character == null)
+							{
+								Log("ROSTER_ENTRY_CHARACTER_NULL party=" + partyId + " roster=" + rosterName);
+								continue;
+							}
+
 							rosterEntries++;
 							ScanResult r = InspectCharacter(character);
 							if (r.Flags.Count == 0) continue;
@@ -134,11 +160,11 @@ namespace AelfeyjaRescue
 					}
 				}
 
-				Log("Summary: parties=" + partyCount + ", rosterEntries=" + rosterEntries + ", badHits=" + badHits.Count + ", uniqueBad=" + uniqueBad.Count);
-				Log("===== PARTY ROSTER SCAN END =====");
+				Log("Summary: parties=" + partyCount + ", rosters=" + rosterCount + ", rosterFailures=" + rosterFailures + ", rosterEntries=" + rosterEntries + ", badHits=" + badHits.Count + ", uniqueBad=" + uniqueBad.Count);
+				Log("===== PARTY ROSTER SCAN v1.3 END =====");
 
-				string sample = badHits.Count == 0 ? "none" : string.Join(" | ", badHits.Take(12).ToArray());
-				return "PARTY_SCAN parties=" + partyCount + ", entries=" + rosterEntries + ", badHits=" + badHits.Count + ", uniqueBad=" + uniqueBad.Count + ". " + sample;
+				string sample = badHits.Count == 0 ? "none" : string.Join(" | ", badHits.Take(15).ToArray());
+				return "PARTY_SCAN_V13 parties=" + partyCount + ", rosters=" + rosterCount + ", failures=" + rosterFailures + ", entries=" + rosterEntries + ", badHits=" + badHits.Count + ", uniqueBad=" + uniqueBad.Count + ". " + sample;
 			}
 			catch (Exception ex)
 			{
@@ -171,29 +197,22 @@ namespace AelfeyjaRescue
 
 			FieldInfo heroField = FindField(c.GetType(), "_heroObject");
 			object hero = SafeFieldGet(heroField, c);
-			r.IsHero = hero != null;
-
-			FieldInfo defaultSkillsField = FindField(c.GetType(), "DefaultCharacterSkills");
-			object defaultSkills = SafeFieldGet(defaultSkillsField, c);
-			r.DefaultSkillsState = defaultSkillsField == null ? "FIELD_NOT_FOUND" : (defaultSkills == null ? "NULL" : "OK");
-
-			if (defaultSkillsField == null)
-				r.Flags.Add("DEFAULT_SKILLS_FIELD_MISSING");
-			else if (defaultSkills == null)
-				r.Flags.Add("DEFAULT_SKILLS_NULL");
-			else
-			{
-				object innerSkills = GetProperty(defaultSkills, "Skills");
-				if (innerSkills == null)
-					r.Flags.Add("DEFAULT_SKILLS_INNER_NULL");
-			}
+			object isHeroProperty = GetProperty(c, "IsHero");
+			r.IsHero = hero != null || (isHeroProperty is bool && (bool)isHeroProperty);
 
 			FieldInfo originField = FindField(c.GetType(), "_originCharacter");
 			object origin = SafeFieldGet(originField, c);
-			r.OriginId = origin == null ? "null" : GetStringId(origin);
+			r.OriginId = origin == null ? "null/original" : GetStringId(origin);
 
 			if (r.IsHero)
 			{
+				// Null origin is NORMAL for original heroes and is not an error.
+				if (hero == null)
+				{
+					r.Flags.Add("ISHERO_TRUE_BUT_HEROOBJECT_NULL");
+					return r;
+				}
+
 				object heroCharacter = GetProperty(hero, "CharacterObject");
 				if (heroCharacter == null)
 					r.Flags.Add("HERO_CHARACTEROBJECT_NULL");
@@ -202,34 +221,114 @@ namespace AelfeyjaRescue
 
 				FieldInfo heroSkillsField = FindField(hero.GetType(), "_heroSkills");
 				object heroSkills = SafeFieldGet(heroSkillsField, hero);
-				r.HeroSkillsState = heroSkillsField == null ? "FIELD_NOT_FOUND" : (heroSkills == null ? "NULL" : "OK");
+				r.HeroSkillsState = heroSkillsField == null ? "FIELD_NOT_FOUND" : (heroSkills == null ? "NULL_TOLERATED_BY_VANILLA" : "OK");
+				r.DefaultSkillsState = "not_used_for_hero_GetSkillValue";
+				return r;
+			}
 
-				// A null Hero._heroSkills is tolerated by vanilla Hero.GetSkillValue(), so log it
-				// diagnostically but do not classify it as a fatal CharacterObject error by itself.
-				if (originField != null && origin == null)
-					r.Flags.Add("HERO_ORIGIN_NULL");
+			// This is the path implicated by the crash dump: regular CharacterObject.GetSkillValue
+			// dereferences DefaultCharacterSkills.Skills without the hero safety path.
+			FieldInfo defaultSkillsField = FindField(c.GetType(), "DefaultCharacterSkills");
+			if (defaultSkillsField == null)
+			{
+				r.ScannerWarning = true;
+				r.DefaultSkillsState = "FIELD_NOT_FOUND";
+				return r;
+			}
+
+			object defaultSkills = SafeFieldGet(defaultSkillsField, c);
+			if (defaultSkills == null)
+			{
+				r.DefaultSkillsState = "NULL";
+				r.Flags.Add("REGULAR_DEFAULT_SKILLS_NULL");
+				return r;
+			}
+
+			object innerSkills = GetMember(defaultSkills, "Skills");
+			if (innerSkills == null)
+			{
+				r.DefaultSkillsState = "INNER_SKILLS_NULL";
+				r.Flags.Add("REGULAR_DEFAULT_SKILLS_INNER_NULL");
 			}
 			else
 			{
-				r.HeroSkillsState = "n/a";
+				r.DefaultSkillsState = "OK";
 			}
-
+			r.HeroSkillsState = "n/a";
 			return r;
 		}
 
-		private static IEnumerable<object> EnumerateRosterCharacters(object roster)
+		private static object GetRosterFromParty(object party, string rosterName)
 		{
-			MethodInfo m = roster.GetType().GetMethod("GetTroopRoster", InstanceFlags);
-			IEnumerable entries = null;
-			try { entries = m == null ? null : m.Invoke(roster, null) as IEnumerable; } catch { }
-			if (entries == null) yield break;
+			object roster = GetProperty(party, rosterName);
+			if (roster != null) return roster;
 
-			foreach (object entry in entries)
+			object partyBase = GetProperty(party, "Party");
+			if (partyBase != null)
 			{
-				if (entry == null) continue;
-				object character = GetProperty(entry, "Character");
-				if (character != null) yield return character;
+				roster = GetProperty(partyBase, rosterName);
+				if (roster != null) return roster;
 			}
+			return null;
+		}
+
+		private static bool TryEnumerateRosterEntries(object roster, out List<object> entries, out string error)
+		{
+			entries = new List<object>();
+			error = null;
+			try
+			{
+				int count = GetIntMember(roster, "Count", "_count");
+				if (count < 0)
+				{
+					error = "COUNT_NOT_FOUND";
+					return false;
+				}
+
+				MethodInfo getter = roster.GetType().GetMethods(InstanceFlags)
+					.FirstOrDefault(m => m.Name == "GetElementCopyAtIndex" && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType == typeof(int));
+
+				if (getter != null)
+				{
+					for (int i = 0; i < count; i++)
+					{
+						object entry = getter.Invoke(roster, new object[] { i });
+						if (entry != null) entries.Add(entry);
+					}
+					return true;
+				}
+
+				FieldInfo dataField = FindField(roster.GetType(), "data") ?? FindField(roster.GetType(), "_data");
+				object data = SafeFieldGet(dataField, roster);
+				Array array = data as Array;
+				if (array == null)
+				{
+					error = "NO_GETELEMENT_AND_NO_DATA_ARRAY";
+					return false;
+				}
+
+				int limit = Math.Min(count, array.Length);
+				for (int i = 0; i < limit; i++)
+				{
+					object entry = array.GetValue(i);
+					if (entry != null) entries.Add(entry);
+				}
+				return true;
+			}
+			catch (Exception ex)
+			{
+				error = Flatten(ex);
+				return false;
+			}
+		}
+
+		private static int GetIntMember(object obj, string propertyName, string fieldName)
+		{
+			object p = GetProperty(obj, propertyName);
+			if (p is int) return (int)p;
+			FieldInfo f = FindField(obj.GetType(), fieldName);
+			object v = SafeFieldGet(f, obj);
+			return v is int ? (int)v : -1;
 		}
 
 		private static IEnumerable<object> GetAllCharacters()
@@ -238,14 +337,16 @@ namespace AelfeyjaRescue
 			object all = GetStaticMember(characterType, "All");
 			if (all is IEnumerable)
 			{
-				foreach (object c in (IEnumerable)all) yield return c;
+				foreach (object c in (IEnumerable)all)
+					yield return c;
 				yield break;
 			}
 
 			object campaign = GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current");
 			IEnumerable chars = campaign == null ? null : GetProperty(campaign, "Characters") as IEnumerable;
 			if (chars != null)
-				foreach (object c in chars) yield return c;
+				foreach (object c in chars)
+					yield return c;
 		}
 
 		private static IEnumerable GetAllParties()
@@ -255,12 +356,59 @@ namespace AelfeyjaRescue
 			if (all is IEnumerable) return (IEnumerable)all;
 
 			object campaign = GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current");
-			return campaign == null ? null : GetProperty(campaign, "MobileParties") as IEnumerable;
+			if (campaign == null) return null;
+			return GetProperty(campaign, "MobileParties") as IEnumerable;
 		}
 
 		private static bool CampaignReady()
 		{
-			return GetStaticMember(FindType("TaleWorlds.CampaignSystem.Campaign"), "Current") != null;
+			Type campaignType = FindType("TaleWorlds.CampaignSystem.Campaign");
+			return GetStaticMember(campaignType, "Current") != null;
+		}
+
+		private static string GetStringId(object obj)
+		{
+			if (obj == null) return "<null>";
+			object id = GetMember(obj, "StringId");
+			return id == null ? "<no-id>" : id.ToString();
+		}
+
+		private static object GetMember(object obj, string name)
+		{
+			if (obj == null) return null;
+			object value = GetProperty(obj, name);
+			if (value != null) return value;
+			FieldInfo f = FindField(obj.GetType(), name);
+			return SafeFieldGet(f, obj);
+		}
+
+		private static object GetProperty(object obj, string name)
+		{
+			if (obj == null) return null;
+			try
+			{
+				PropertyInfo p = obj.GetType().GetProperty(name, InstanceFlags);
+				return p == null ? null : p.GetValue(obj, null);
+			}
+			catch { return null; }
+		}
+
+		private static object GetStaticMember(Type type, string name)
+		{
+			if (type == null) return null;
+			try
+			{
+				PropertyInfo p = type.GetProperty(name, StaticFlags);
+				if (p != null) return p.GetValue(null, null);
+			}
+			catch { }
+			try
+			{
+				FieldInfo f = type.GetField(name, StaticFlags);
+				if (f != null) return f.GetValue(null);
+			}
+			catch { }
+			return null;
 		}
 
 		private static FieldInfo FindField(Type type, string name)
@@ -279,24 +427,6 @@ namespace AelfeyjaRescue
 			try { return field.GetValue(obj); } catch { return null; }
 		}
 
-		private static object GetProperty(object obj, string name)
-		{
-			if (obj == null) return null;
-			PropertyInfo p = obj.GetType().GetProperty(name, InstanceFlags | BindingFlags.Static);
-			if (p == null) return null;
-			try { return p.GetValue(obj, null); } catch { return null; }
-		}
-
-		private static object GetStaticMember(Type type, string name)
-		{
-			if (type == null) return null;
-			PropertyInfo p = type.GetProperty(name, StaticFlags);
-			if (p != null) try { return p.GetValue(null, null); } catch { }
-			FieldInfo f = type.GetField(name, StaticFlags);
-			if (f != null) try { return f.GetValue(null); } catch { }
-			return null;
-		}
-
 		private static Type FindType(string fullName)
 		{
 			foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
@@ -311,16 +441,10 @@ namespace AelfeyjaRescue
 			return null;
 		}
 
-		private static string GetStringId(object obj)
-		{
-			if (obj == null) return "<null>";
-			object id = GetProperty(obj, "StringId");
-			return id == null ? "<null-id>" : id.ToString();
-		}
-
 		private static string Flatten(Exception ex)
 		{
-			if (ex is TargetInvocationException && ex.InnerException != null) ex = ex.InnerException;
+			while (ex is TargetInvocationException && ex.InnerException != null)
+				ex = ex.InnerException;
 			return ex.GetType().Name + ": " + ex.Message;
 		}
 
@@ -339,21 +463,22 @@ namespace AelfeyjaRescue
 
 		private sealed class ScanResult
 		{
-			public string Id;
+			public string Id = "<unknown>";
 			public bool IsHero;
-			public string DefaultSkillsState;
-			public string HeroSkillsState;
-			public string OriginId;
+			public bool ScannerWarning;
+			public string DefaultSkillsState = "unknown";
+			public string HeroSkillsState = "unknown";
+			public string OriginId = "unknown";
 			public readonly List<string> Flags = new List<string>();
 
 			public string ToLogLine()
 			{
-				return "CHAR id=" + Id +
+				return "id=" + Id +
 					" isHero=" + IsHero +
 					" defaultSkills=" + DefaultSkillsState +
 					" heroSkills=" + HeroSkillsState +
 					" origin=" + OriginId +
-					" flags=" + (Flags.Count == 0 ? "OK" : string.Join("+", Flags.ToArray()));
+					" flags=" + (Flags.Count == 0 ? "none" : string.Join("+", Flags.ToArray()));
 			}
 		}
 	}
