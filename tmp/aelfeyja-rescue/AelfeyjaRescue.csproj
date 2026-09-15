@@ -9,6 +9,9 @@
     <Deterministic>true</Deterministic>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="BattleForensics.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Bannerlord.ReferenceAssemblies.Core" Version="1.4.0.112726-beta" PrivateAssets="All" />
     <PackageReference Include="Lib.Harmony" Version="2.3.6" PrivateAssets="All" />
   </ItemGroup>
