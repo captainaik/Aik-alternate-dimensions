@@ -2,7 +2,7 @@
 <Module>
   <Name value="Character Crash Guard"/>
   <Id value="AelfeyjaRescue"/>
-  <Version value="v1.5.0"/>
+  <Version value="v1.6.0"/>
   <SingleplayerModule value="true"/>
   <MultiplayerModule value="false"/>
   <Official value="false"/>
@@ -19,6 +19,15 @@
       <Name value="Character Crash Guard"/>
       <DLLName value="AelfeyjaRescue.dll"/>
       <SubModuleClassType value="AelfeyjaRescue.GuardSubModule"/>
+      <Tags>
+        <Tag key="DedicatedServerType" value="none"/>
+        <Tag key="IsNoRenderModeElement" value="false"/>
+      </Tags>
+    </SubModule>
+    <SubModule>
+      <Name value="Battle Forensics"/>
+      <DLLName value="AelfeyjaRescue.dll"/>
+      <SubModuleClassType value="AelfeyjaRescue.BattleForensicsSubModule"/>
       <Tags>
         <Tag key="DedicatedServerType" value="none"/>
         <Tag key="IsNoRenderModeElement" value="false"/>
