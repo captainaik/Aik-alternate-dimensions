@@ -42,8 +42,8 @@ namespace AelfeyjaRescue
 	{
 		public override void RegisterEvents()
 		{
-			CampaignEvents.MapEventStarted.AddNonSerializedListener(this, OnMapEventStarted);
-			CampaignEvents.MapEventEnded.AddNonSerializedListener(this, (mapEvent, party1, party2) => OnMapEventEnded(mapEvent));
+			CampaignEvents.MapEventStarted.AddNonSerializedListener(this, (mapEvent, party1, party2) => OnMapEventStarted(mapEvent));
+			CampaignEvents.MapEventEnded.AddNonSerializedListener(this, OnMapEventEnded);
 			CampaignEvents.OnPlayerBattleEndEvent.AddNonSerializedListener(this, OnPlayerBattleEnd);
 			CampaignEvents.TickEvent.AddNonSerializedListener(this, OnTick);
 			BattleForensics.Log("Battle Forensics v1.6 events registered.");
