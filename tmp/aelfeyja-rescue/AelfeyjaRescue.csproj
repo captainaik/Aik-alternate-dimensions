@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Remove="BattleForensics.cs" />
+    <Compile Remove="CampaignDiagnostics.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Bannerlord.ReferenceAssemblies.Core" Version="1.5.3.122374-beta" PrivateAssets="All" />
