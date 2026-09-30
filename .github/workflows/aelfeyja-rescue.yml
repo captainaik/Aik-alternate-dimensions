@@ -34,11 +34,11 @@ jobs:
           New-Item -ItemType Directory -Force "$module/Logs" | Out-Null
           Copy-Item 'tmp/aelfeyja-rescue/SubModule.xml' "$module/SubModule.xml"
           Copy-Item 'tmp/aelfeyja-rescue/bin/Release/net472/AelfeyjaRescue.dll' "$module/bin/Win64_Shipping_Client/AelfeyjaRescue.dll"
-          Compress-Archive -Path $module -DestinationPath 'CharacterCrashGuard-v1.7.0.zip' -Force
+          Compress-Archive -Path $module -DestinationPath 'CharacterCrashGuard-v1.7.1.zip' -Force
 
       - name: Upload module
         uses: actions/upload-artifact@v4
         with:
-          name: CharacterCrashGuard-v1.7.0
-          path: CharacterCrashGuard-v1.7.0.zip
+          name: CharacterCrashGuard-v1.7.1
+          path: CharacterCrashGuard-v1.7.1.zip
           if-no-files-found: error
