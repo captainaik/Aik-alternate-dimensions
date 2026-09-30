@@ -1,4 +1,4 @@
-name: Build Aelfeyja Rescue
+name: Build Character Crash Guard
 
 on:
   push:
@@ -29,15 +29,16 @@ jobs:
       - name: Package Bannerlord module
         shell: pwsh
         run: |
-          $module = 'staging/AelfeyjaRescue'
+          $module = 'staging/CharacterCrashGuard'
           New-Item -ItemType Directory -Force "$module/bin/Win64_Shipping_Client" | Out-Null
+          New-Item -ItemType Directory -Force "$module/Logs" | Out-Null
           Copy-Item 'tmp/aelfeyja-rescue/SubModule.xml' "$module/SubModule.xml"
           Copy-Item 'tmp/aelfeyja-rescue/bin/Release/net472/AelfeyjaRescue.dll' "$module/bin/Win64_Shipping_Client/AelfeyjaRescue.dll"
-          Compress-Archive -Path $module -DestinationPath 'AelfeyjaRescue.zip' -Force
+          Compress-Archive -Path $module -DestinationPath 'CharacterCrashGuard-v1.7.0.zip' -Force
 
       - name: Upload module
         uses: actions/upload-artifact@v4
         with:
-          name: AelfeyjaRescue
-          path: AelfeyjaRescue.zip
+          name: CharacterCrashGuard-v1.7.0
+          path: CharacterCrashGuard-v1.7.0.zip
           if-no-files-found: error
